@@ -13,6 +13,7 @@
 #include "libslic3r/ProjectTask.hpp"
 #include "slic3r/Utils/json_diff.hpp"
 #include "slic3r/Utils/NetworkAgent.hpp"
+#include "boost/bimap/bimap.hpp"
 #include "CameraPopup.hpp"
 #include "libslic3r/Calib.hpp"
 #include "libslic3r/Utils.hpp"
@@ -39,6 +40,7 @@
 #define VIRTUAL_TRAY_ID         254
 #define START_SEQ_ID            20000
 #define END_SEQ_ID              30000
+#define SUBSCRIBE_RETRY_COUNT   5
 
 inline int correct_filament_temperature(int filament_temp)
 {
@@ -623,6 +625,7 @@ public:
     bool    is_support_layer_num { false };
     bool    nozzle_blob_detection_enabled{ false };
 
+    int last_cali_version = -1;
     int cali_version = -1;
     float                      cali_selected_nozzle_dia { 0.0 };
     // 1: record when start calibration in preset page
@@ -956,9 +959,9 @@ public:
 
     /* Msg for display MsgFn */
     typedef std::function<void(std::string topic, std::string payload)> MsgFn;
-    int publish_json(std::string json_str, int qos = 0);
-    int cloud_publish_json(std::string json_str, int qos = 0);
-    int local_publish_json(std::string json_str, int qos = 0);
+    int publish_json(std::string json_str, int qos = 0, int flag = 0);
+    int cloud_publish_json(std::string json_str, int qos = 0, int flag = 0);
+    int local_publish_json(std::string json_str, int qos = 0, int flag = 0);
     int parse_json(std::string payload, bool key_filed_only = false);
     int publish_gcode(std::string gcode_str);
 
@@ -1077,11 +1080,12 @@ public:
     static std::string get_printer_ams_img(std::string type_str);
     static PrinterArch get_printer_arch(std::string type_str);
     static std::string get_ftp_folder(std::string type_str);
-    static bool        get_printer_is_enclosed(std::string type_str);
-    static std::vector<std::string> get_resolution_supported(std::string type_str);
-    static std::vector<std::string> get_compatible_machine(std::string type_str);
+    static bool get_printer_is_enclosed(std::string type_str);
     static bool load_filaments_blacklist_config();
     static void check_filaments_in_blacklist(std::string tag_vendor, std::string tag_type, bool& in_blacklist, std::string& ac, std::string& info);
+    static std::vector<std::string> get_resolution_supported(std::string type_str);
+    static std::vector<std::string> get_compatible_machine(std::string type_str);
+    static boost::bimaps::bimap<std::string, std::string> get_all_model_id_with_name();
     static std::string load_gcode(std::string type_str, std::string gcode_file);
 };
 

@@ -135,13 +135,6 @@ enum CameraMenuIDs {
     wxID_CAMERA_COUNT,
 };
 
-enum VersionUpdateType
-{
-    ReleaseVersionUpdate,
-    BetaVersionUpdate
-};
-
-
 class Tab;
 class ConfigWizard;
 class GizmoObjectManipulation;
@@ -311,11 +304,11 @@ private:
     bool             m_is_dark_mode{ false };
     bool             m_adding_script_handler { false };
     bool             m_side_popup_status{false};
-    bool             m_show_http_errpr_msgdlg{false};
+    bool             m_show_error_msgdlg{false};
     wxString         m_info_dialog_content;
     HttpServer       m_http_server;
 
-    boost::thread    m_check_network_thread;
+    boost::thread    m_check_cert_thread;
 public:
     //try again when subscription fails
     void            on_start_subscribe_again(std::string dev_id);
@@ -462,9 +455,11 @@ public:
     bool            m_studio_active = true;
     std::chrono::system_clock::time_point  last_active_point;
 
-    void            check_update(bool show_tips, int by_user, VersionUpdateType = ReleaseVersionUpdate);
+    void            check_update(bool show_tips, int by_user);
     void            check_new_version(bool show_tips = false, int by_user = 0);
-    void            check_beta_version(bool show_tips = false, int by_user = 0);
+    void            check_cert();
+    void            process_network_msg(std::string dev_id, std::string msg);
+    void            check_beta_version();
     void            request_new_version(int by_user);
     void            enter_force_upgrade();
     void            set_skip_version(bool skip = true);

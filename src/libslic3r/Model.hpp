@@ -6,6 +6,7 @@
 #include "Geometry.hpp"
 #include "ObjectID.hpp"
 #include "Point.hpp"
+#include "AppConfig.hpp"
 #include "PrintConfig.hpp"
 #include "Slicing.hpp"
 #include "SLA/SupportPoint.hpp"
@@ -388,6 +389,7 @@ public:
     CutConnectors cut_connectors;
     CutObjectBase cut_id;
 
+    std::vector<const ModelVolume*> const_volumes() const {return std::vector<const ModelVolume*>(volumes.begin(), volumes.end());}
     Model*                  get_model() { return m_model; }
     const Model*            get_model() const { return m_model; }
     // BBS: production extension
@@ -815,6 +817,7 @@ struct RaycastResult
 struct TextInfo
 {
     std::string m_font_name;
+    std::string m_font_version;
     float       m_font_size     = 16.f;
     int         m_curr_font_idx = 0;
     bool        m_bold          = true;
@@ -829,7 +832,8 @@ struct TextInfo
 
     RaycastResult m_rr;
     template<typename Archive> void serialize(Archive &ar) {
-        ar(m_font_name, m_font_size, m_curr_font_idx, m_bold, m_italic, m_thickness, m_embeded_depth, m_rotate_angle, m_text_gap, m_is_surface_text, m_keep_horizontal, m_text, m_rr);
+        ar(m_font_name, m_font_version, m_font_size, m_curr_font_idx, m_bold, m_italic, m_thickness, m_embeded_depth, m_rotate_angle, m_text_gap, m_is_surface_text,
+           m_keep_horizontal, m_text, m_rr);
     }
 };
 
@@ -958,7 +962,7 @@ public:
     // Split this volume, append the result to the object owning this volume.
     // Return the number of volumes created from this one.
     // This is useful to assign different materials to different volumes of an object.
-    size_t              split(unsigned int max_extruders);
+    size_t              split(unsigned int max_extruders, float scale_det = 1.f);
     void                translate(double x, double y, double z) { translate(Vec3d(x, y, z)); }
     void                translate(const Vec3d& displacement);
     void                scale(const Vec3d& scaling_factors);
@@ -1026,7 +1030,7 @@ public:
 
     void set_text_info(const TextInfo& text_info) { m_text_info = text_info; }
     const TextInfo& get_text_info() const { return m_text_info; }
-
+    bool  is_text() const { return !m_text_info.m_text.empty(); }
     const Transform3d &get_matrix(bool dont_translate = false, bool dont_rotate = false, bool dont_scale = false, bool dont_mirror = false) const;
 	void set_new_unique_id() {
         ObjectBase::set_new_unique_id();
@@ -1314,10 +1318,13 @@ public:
 
     // BBS
     void rotate(Matrix3d rotation_matrix) {
-        // note: must remove scaling from transformation, otherwise auto-orientation with scaled objects will have problem
-        auto R            = m_transformation.get_rotation_matrix().matrix().block<3, 3>(0, 0);
+        auto R = m_transformation.get_rotation_matrix();
         auto R_new = rotation_matrix * R;
         auto euler_angles = Geometry::extract_euler_angles(R_new);
+        //BOOST_LOG_TRIVIAL(debug) << "old R:\n"
+        //                         << R.matrix() << "\nnew R:\n"
+        //                         << R_new.matrix() << "\nold euler angles: " << m_transformation.get_rotation().transpose() << "\n"
+        //                         << "new euler angles: " << euler_angles.transpose();
         set_rotation(euler_angles);
     }
 
@@ -1582,6 +1589,15 @@ public:
 
     OBJECTBASE_DERIVED_COPY_MOVE_CLONE(Model)
 
+    static Model read_from_step(const std::string&                                      input_file,
+                                LoadStrategy                                            options,
+                                ImportStepProgressFn                                    stepFn,
+                                StepIsUtf8Fn                                            stepIsUtf8Fn,
+                                std::function<int(Slic3r::Step&, double&, double&, bool&)>     step_mesh_fn,
+                                double                                                  linear_defletion,
+                                double                                                  angle_defletion,
+                                bool                                                    is_split_compound);
+
     //BBS: add part plate related logic
     // BBS: backup
     //BBS: is_xxx is used for is_bbs_3mf when loading 3mf, is used for is_inches when loading amf
@@ -1591,12 +1607,9 @@ public:
         LoadStrategy options = LoadStrategy::AddDefaultInstances, PlateDataPtrs* plate_data = nullptr,
         std::vector<Preset*>* project_presets = nullptr, bool* is_xxx = nullptr, Semver* file_version = nullptr, Import3mfProgressFn proFn = nullptr,
                                 ImportstlProgressFn        stlFn                = nullptr,
-                                ImportStepProgressFn       stepFn               = nullptr,
-                                StepIsUtf8Fn               stepIsUtf8Fn         = nullptr,
                                 BBLProject *               project              = nullptr,
                                 int                        plate_id             = 0,
-                                ObjImportColorFn           objFn                = nullptr,
-                                std::function<int(Slic3r::Step&, double&, double&)>      step_mesh_fn = nullptr
+                                ObjImportColorFn           objFn                = nullptr
                                 );
     // BBS
     static bool    obj_import_vertex_color_deal(const std::vector<unsigned char> &vertex_filament_ids, const unsigned char &first_extruder_id, Model *model);

@@ -1,12 +1,16 @@
 #include "GLGizmoMeshBoolean.hpp"
-#include "slic3r/GUI/GLCanvas3D.hpp"
-#include "slic3r/GUI/ImGuiWrapper.hpp"
-#include "slic3r/GUI/GUI.hpp"
+#include "libslic3r/CSGMesh/CSGMesh.hpp"
 #include "libslic3r/MeshBoolean.hpp"
-#include "slic3r/GUI/GUI_ObjectList.hpp"
-#include "slic3r/GUI/Plater.hpp"
+#include "libslic3r/CSGMesh/ModelToCSGMesh.hpp"
+#include "libslic3r/CSGMesh/PerformCSGMeshBooleans.hpp"
 #include "slic3r/GUI/Camera.hpp"
+#include "slic3r/GUI/GLCanvas3D.hpp"
+#include "slic3r/GUI/GUI.hpp"
+#include "slic3r/GUI/GUI_ObjectList.hpp"
+#include "slic3r/GUI/ImGuiWrapper.hpp"
 #include "slic3r/GUI/NotificationManager.hpp"
+#include "slic3r/GUI/Plater.hpp"
+
 #ifndef IMGUI_DEFINE_MATH_OPERATORS
 #define IMGUI_DEFINE_MATH_OPERATORS
 #endif
@@ -232,7 +236,7 @@ void GLGizmoMeshBoolean::on_render_input_window(float x, float y, float bottom_l
     const int max_cap_length = ImGui::GetStyle().WindowPadding.x + ImGui::GetStyle().ItemSpacing.x + std::max(ImGui::CalcTextSize(_u8L("Source Volume").c_str()).x, ImGui::CalcTextSize(_u8L("Tool Volume").c_str()).x);
     const int select_btn_length = 2 * ImGui::GetStyle().FramePadding.x + std::max(ImGui::CalcTextSize(("1 " + _u8L("selected")).c_str()).x, ImGui::CalcTextSize(_u8L("Select").c_str()).x);
 
-    auto selectable = [this](const wxString& label, bool selected, const ImVec2& size_arg) {
+    auto selectable = [this](const std::string& label, bool selected, const ImVec2& size_arg) {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0,0 });
 
         ImGuiWindow* window = ImGui::GetCurrentWindow();
@@ -305,8 +309,8 @@ void GLGizmoMeshBoolean::on_render_input_window(float x, float y, float bottom_l
     std::string cap_str1 = m_operation_mode != MeshBooleanOperation::Difference ? _u8L("Part 1") : _u8L("Subtract from");
     m_imgui->text(cap_str1);
     ImGui::SameLine(max_cap_length);
-    wxString select_src_str = m_src.mv ? "1 " + _u8L("selected") : _u8L("Select");
-    select_src_str << "##select_source_volume";
+    std::string select_src_str = m_src.mv ? "1 " + _u8L("selected") : _u8L("Select");
+    select_src_str += "##select_source_volume";
     ImGui::PushItemWidth(select_btn_length);
     if (selectable(select_src_str, m_selecting_state == MeshBooleanSelectingState::SelectSource, ImVec2(select_btn_length, 0)))
         m_selecting_state = MeshBooleanSelectingState::SelectSource;
@@ -334,8 +338,8 @@ void GLGizmoMeshBoolean::on_render_input_window(float x, float y, float bottom_l
     std::string cap_str2 = m_operation_mode != MeshBooleanOperation::Difference ? _u8L("Part 2") : _u8L("Subtract with");
     m_imgui->text(cap_str2);
     ImGui::SameLine(max_cap_length);
-    wxString select_tool_str = m_tool.mv ? "1 " + _u8L("selected") : _u8L("Select");
-    select_tool_str << "##select_tool_volume";
+    std::string select_tool_str = m_tool.mv ? "1 " + _u8L("selected") : _u8L("Select");
+    select_tool_str += "##select_tool_volume";
     ImGui::PushItemWidth(select_btn_length);
     if (selectable(select_tool_str, m_selecting_state == MeshBooleanSelectingState::SelectTool, ImVec2(select_btn_length, 0)))
         m_selecting_state = MeshBooleanSelectingState::SelectTool;
@@ -364,18 +368,21 @@ void GLGizmoMeshBoolean::on_render_input_window(float x, float y, float bottom_l
     if (m_operation_mode == MeshBooleanOperation::Union)
     {
         if (operate_button(_L("Union") + "##btn", enable_button)) {
-            TriangleMesh temp_src_mesh = m_src.mv->mesh();
-            temp_src_mesh.transform(m_src.trafo);
-            TriangleMesh temp_tool_mesh = m_tool.mv->mesh();
-            temp_tool_mesh.transform(m_tool.trafo);
-            std::vector<TriangleMesh> temp_mesh_resuls;
-            Slic3r::MeshBoolean::mcut::make_boolean(temp_src_mesh, temp_tool_mesh, temp_mesh_resuls, "UNION");
-            if (temp_mesh_resuls.size() != 0) {
-                generate_new_volume(true, *temp_mesh_resuls.begin());
-                m_warning_texts[index] = "";
-            }
-            else {
-                m_warning_texts[index] = warning_text_common;
+            m_warning_texts[index] = check_boolean_possible({ m_src.mv, m_tool.mv });
+            if(m_warning_texts[index] == "") {
+                TriangleMesh temp_src_mesh = m_src.mv->mesh();
+                temp_src_mesh.transform(m_src.trafo);
+                TriangleMesh temp_tool_mesh = m_tool.mv->mesh();
+                temp_tool_mesh.transform(m_tool.trafo);
+                std::vector<TriangleMesh> temp_mesh_resuls;
+                Slic3r::MeshBoolean::mcut::make_boolean(temp_src_mesh, temp_tool_mesh, temp_mesh_resuls, "UNION");
+                if (temp_mesh_resuls.size() != 0) {
+                    generate_new_volume(true, *temp_mesh_resuls.begin());
+                    m_warning_texts[index] = "";
+                }
+                else {
+                    m_warning_texts[index] = warning_text_common;
+                }
             }
             m_selecting_state = MeshBooleanSelectingState::SelectSource;
             m_src.reset();
@@ -385,18 +392,21 @@ void GLGizmoMeshBoolean::on_render_input_window(float x, float y, float bottom_l
     else if (m_operation_mode == MeshBooleanOperation::Difference) {
         m_imgui->bbl_checkbox(_L("Delete input"), m_diff_delete_input);
         if (operate_button(_L("Difference") + "##btn", enable_button)) {
-            TriangleMesh temp_src_mesh = m_src.mv->mesh();
-            temp_src_mesh.transform(m_src.trafo);
-            TriangleMesh temp_tool_mesh = m_tool.mv->mesh();
-            temp_tool_mesh.transform(m_tool.trafo);
-            std::vector<TriangleMesh> temp_mesh_resuls;
-            Slic3r::MeshBoolean::mcut::make_boolean(temp_src_mesh, temp_tool_mesh, temp_mesh_resuls, "A_NOT_B");
-            if (temp_mesh_resuls.size() != 0) {
-                generate_new_volume(m_diff_delete_input, *temp_mesh_resuls.begin());
-                m_warning_texts[index] = "";
-            }
-            else {
-                m_warning_texts[index] = warning_text_common;
+            m_warning_texts[index] = check_boolean_possible({ m_src.mv, m_tool.mv });
+            if (m_warning_texts[index] == "") {
+                TriangleMesh temp_src_mesh = m_src.mv->mesh();
+                temp_src_mesh.transform(m_src.trafo);
+                TriangleMesh temp_tool_mesh = m_tool.mv->mesh();
+                temp_tool_mesh.transform(m_tool.trafo);
+                std::vector<TriangleMesh> temp_mesh_resuls;
+                Slic3r::MeshBoolean::mcut::make_boolean(temp_src_mesh, temp_tool_mesh, temp_mesh_resuls, "A_NOT_B");
+                if (temp_mesh_resuls.size() != 0) {
+                    generate_new_volume(m_diff_delete_input, *temp_mesh_resuls.begin());
+                    m_warning_texts[index] = "";
+                }
+                else {
+                    m_warning_texts[index] = warning_text_common;
+                }
             }
             m_selecting_state = MeshBooleanSelectingState::SelectSource;
             m_src.reset();
@@ -406,18 +416,21 @@ void GLGizmoMeshBoolean::on_render_input_window(float x, float y, float bottom_l
     else if (m_operation_mode == MeshBooleanOperation::Intersection){
         m_imgui->bbl_checkbox(_L("Delete input"), m_inter_delete_input);
         if (operate_button(_L("Intersection") + "##btn", enable_button)) {
-            TriangleMesh temp_src_mesh = m_src.mv->mesh();
-            temp_src_mesh.transform(m_src.trafo);
-            TriangleMesh temp_tool_mesh = m_tool.mv->mesh();
-            temp_tool_mesh.transform(m_tool.trafo);
-            std::vector<TriangleMesh> temp_mesh_resuls;
-            Slic3r::MeshBoolean::mcut::make_boolean(temp_src_mesh, temp_tool_mesh, temp_mesh_resuls, "INTERSECTION");
-            if (temp_mesh_resuls.size() != 0) {
-                generate_new_volume(m_inter_delete_input, *temp_mesh_resuls.begin());
-                m_warning_texts[index] = "";
-            }
-            else {
-                m_warning_texts[index] = warning_text_intersection;
+            m_warning_texts[index] = check_boolean_possible({ m_src.mv, m_tool.mv });
+            if (m_warning_texts[index] == "") {
+                TriangleMesh temp_src_mesh = m_src.mv->mesh();
+                temp_src_mesh.transform(m_src.trafo);
+                TriangleMesh temp_tool_mesh = m_tool.mv->mesh();
+                temp_tool_mesh.transform(m_tool.trafo);
+                std::vector<TriangleMesh> temp_mesh_resuls;
+                Slic3r::MeshBoolean::mcut::make_boolean(temp_src_mesh, temp_tool_mesh, temp_mesh_resuls, "INTERSECTION");
+                if (temp_mesh_resuls.size() != 0) {
+                    generate_new_volume(m_inter_delete_input, *temp_mesh_resuls.begin());
+                    m_warning_texts[index] = "";
+                }
+                else {
+                    m_warning_texts[index] = warning_text_intersection;
+                }
             }
             m_selecting_state = MeshBooleanSelectingState::SelectSource;
             m_src.reset();

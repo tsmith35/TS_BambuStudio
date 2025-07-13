@@ -145,7 +145,8 @@ std::map<int, std::string> cli_errors = {
     {CLI_OBJECT_COLLISION_IN_LAYER_PRINT, "Object conflicts were detected. Please verify the slicing of all plates in Bambu Studio before uploading."},
     {CLI_SPIRAL_MODE_INVALID_PARAMS, "Some slicing parameters cannot work with Spiral Vase mode. Please solve the issue in Bambu Studio before uploading."},
     {CLI_SLICING_ERROR, "Failed slicing the model. Please verify the slicing of all plates on Bambu Studio before uploading."},
-    {CLI_GCODE_PATH_CONFLICTS, " G-code conflicts detected after slicing. Please make sure the 3mf file can be successfully sliced in the latest Bambu Studio."}
+    {CLI_GCODE_PATH_CONFLICTS, " G-code conflicts detected after slicing. Please make sure the 3mf file can be successfully sliced in the latest Bambu Studio."},
+    {CLI_FILAMENT_UNPRINTABLE_ON_FIRST_LAYER, "Found some filament unprintable at first layer on current Plate. Please make sure the 3mf file can be successfully sliced with the same Plate type in the latest Bambu Studio."}
 };
 
 typedef struct  _sliced_plate_info{
@@ -168,6 +169,7 @@ typedef struct _sliced_info {
     size_t export_time;
     std::vector<std::string> upward_machines;
     std::vector<std::string> downward_machines;
+    std::vector<std::string> upward_compatibility_taint;
 }sliced_info_t;
 std::vector<PrintBase::SlicingStatus> g_slicing_warnings;
 
@@ -420,6 +422,8 @@ void record_exit_reson(std::string outputdir, int code, int plate_id, std::strin
             j["downward_compatible_machine"] = sliced_info.downward_machines;
         if (sliced_info.upward_machines.size() > 0)
             j["upward_compatible_machine"] = sliced_info.upward_machines;
+        if (sliced_info.upward_compatibility_taint.size() > 0)
+            j["upward_compatibility_taint"] = sliced_info.upward_compatibility_taint;
         j["plate_index"] = plate_id;
         j["return_code"] = code;
         j["error_string"] = error_message;
@@ -1287,6 +1291,7 @@ int CLI::run(int argc, char **argv)
     const std::vector<std::string>              &uptodate_filaments          = m_config.option<ConfigOptionStrings>("uptodate_filaments", true)->values;
     std::vector<std::string>                    downward_settings          = m_config.option<ConfigOptionStrings>("downward_settings", true)->values;
     std::vector<std::string> downward_compatible_machines;
+    std::set<std::string> downward_uncompatible_machines;
     //BBS: always use ForwardCompatibilitySubstitutionRule::Enable
     //const ForwardCompatibilitySubstitutionRule   config_substitution_rule = m_config.option<ConfigOptionEnum<ForwardCompatibilitySubstitutionRule>>("config_compatibility", true)->value;
     const ForwardCompatibilitySubstitutionRule   config_substitution_rule = ForwardCompatibilitySubstitutionRule::Enable;
@@ -1572,7 +1577,7 @@ int CLI::run(int argc, char **argv)
                 // BBS: adjust whebackup
                 //LoadStrategy strategy = LoadStrategy::LoadModel | LoadStrategy::LoadConfig|LoadStrategy::AddDefaultInstances;
                 //if (load_aux) strategy = strategy | LoadStrategy::LoadAuxiliary;
-                model = Model::read_from_file(file, &config, &config_substitutions, strategy, &plate_data_src, &project_presets, &is_bbl_3mf, &file_version, nullptr, nullptr, nullptr, nullptr, nullptr, plate_to_slice);
+                model = Model::read_from_file(file, &config, &config_substitutions, strategy, &plate_data_src, &project_presets, &is_bbl_3mf, &file_version, nullptr, nullptr, nullptr, plate_to_slice);
                 if (is_bbl_3mf)
                 {
                     if (!first_file)
@@ -3588,6 +3593,7 @@ int CLI::run(int argc, char **argv)
         }
     }
 
+    bool has_sequence_plates = false;
     int downward_check_size = downward_check_printers.size();
     if (downward_check_size > 0)
     {
@@ -3596,15 +3602,17 @@ int CLI::run(int argc, char **argv)
         int failed_count = 0;
         for (int index = 0; index < plate_count; index ++)
         {
-            if (failed_count == downward_check_size) {
-                BOOST_LOG_TRIVIAL(info) << boost::format("downward_check: all failed, size %1%")%downward_check_size;
-                break;
-            }
             Slic3r::GUI::PartPlate* cur_plate = (Slic3r::GUI::PartPlate *)partplate_list.get_plate(index);
             Vec3d size = plate_obj_size_infos[index].obj_bbox.size();
 
             bool is_sequence = false;
             get_print_sequence(cur_plate, m_print_config, is_sequence);
+            has_sequence_plates |= is_sequence;
+
+            if (failed_count == downward_check_size) {
+                BOOST_LOG_TRIVIAL(info) << boost::format("downward_check: all failed, size %1%")%downward_check_size;
+                break;
+            }
 
             for (int index2 = 0; index2 < downward_check_size; index2 ++)
             {
@@ -3658,21 +3666,43 @@ int CLI::run(int argc, char **argv)
                 }
             }
         }
-        if (failed_count < downward_check_size)
+
+        for (int index2 = 0; index2 < downward_check_size; index2 ++)
         {
-            //has success ones
-            BOOST_LOG_TRIVIAL(info) << boost::format("downward_check: downward_check_size %1%, failed_count %2%")%downward_check_size %failed_count;
-            for (int index2 = 0; index2 < downward_check_size; index2 ++)
-            {
-                if (downward_check_status[index2])
-                    continue;
-                printer_plate_info_t& plate_info = downward_check_printers[index2];
-                BOOST_LOG_TRIVIAL(info) << boost::format("downward_check: found compatible printer %1%")%plate_info.printer_name;
-                downward_compatible_machines.push_back(plate_info.printer_name);
+            printer_plate_info_t& plate_info = downward_check_printers[index2];
+            if (downward_check_status[index2]) {
+                downward_uncompatible_machines.emplace(plate_info.printer_name);
+                BOOST_LOG_TRIVIAL(info) << boost::format("downward_check: found uncompatible printer %1%")%plate_info.printer_name;
             }
-            sliced_info.downward_machines = downward_compatible_machines;
+            else {
+                downward_compatible_machines.push_back(plate_info.printer_name);
+                BOOST_LOG_TRIVIAL(info) << boost::format("downward_check: found compatible printer %1%")%plate_info.printer_name;
+            }
+        }
+        BOOST_LOG_TRIVIAL(info) << boost::format("downward_check: downward_check_size %1%, failed_count %2%")%downward_check_size %failed_count;
+        sliced_info.downward_machines = downward_compatible_machines;
+
+        for(std::vector<std::string>::iterator it = sliced_info.upward_machines.begin(); it != sliced_info.upward_machines.end();){
+            if(downward_uncompatible_machines.find(*it) != downward_uncompatible_machines.end()){
+                BOOST_LOG_TRIVIAL(info) << boost::format("downward_check: remove %1% from upward compatible printers")%*it;
+                it = sliced_info.upward_machines.erase(it);
+            } else {
+                it ++;
+            }
         }
     }
+    else if (downward_check) {
+        int plate_count = partplate_list.get_plate_count();
+        for (int index = 0; index < plate_count; index ++)
+        {
+            Slic3r::GUI::PartPlate* cur_plate = (Slic3r::GUI::PartPlate *)partplate_list.get_plate(index);
+            bool is_sequence = false;
+            get_print_sequence(cur_plate, m_print_config, is_sequence);
+            has_sequence_plates |= is_sequence;
+        }
+    }
+    if (has_sequence_plates)
+        sliced_info.upward_compatibility_taint.push_back("PrintSequenceByObject");
 
     // Loop through transform options.
     bool user_center_specified = false;
@@ -5515,6 +5545,13 @@ int CLI::run(int argc, char **argv)
                                     }
                                     slice_time[TIME_USING_CACHE] = slice_time[TIME_USING_CACHE] + ((long long)Slic3r::Utils::get_current_milliseconds_time_utc() - temp_time);
                                     BOOST_LOG_TRIVIAL(info) << "export_gcode finished: time_using_cache update to " << slice_time[TIME_USING_CACHE] << " secs.";
+
+                                    if (gcode_result && gcode_result->filament_printable_reuslt.has_value()) {
+                                        //found gcode error
+                                        BOOST_LOG_TRIVIAL(error) << "plate " << index + 1 << ": found some filament unprintable on current bed- "<< gcode_result->filament_printable_reuslt.plate_name << std::endl;
+                                        record_exit_reson(outfile_dir, CLI_FILAMENT_UNPRINTABLE_ON_FIRST_LAYER, index + 1, cli_errors[CLI_FILAMENT_UNPRINTABLE_ON_FIRST_LAYER], sliced_info);
+                                        flush_and_exit(CLI_FILAMENT_UNPRINTABLE_ON_FIRST_LAYER);
+                                    }
 
                                     //outfile_final = (dynamic_cast<Print*>(print))->print_statistics().finalize_output_path(outfile);
                                     //m_fff_print->export_gcode(m_temp_output_path, m_gcode_result, [this](const ThumbnailsParams& params) { return this->render_thumbnails(params); });

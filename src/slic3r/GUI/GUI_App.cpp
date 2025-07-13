@@ -1311,6 +1311,8 @@ void GUI_App::post_init()
 
                 this->check_track_enable();
             }
+
+            this->check_cert();
         });
     }
 
@@ -1952,6 +1954,10 @@ void GUI_App::init_networking_callbacks()
                     m_server_error_dialog = new NetworkErrorDialog(mainframe);
                 }
 
+                if(plater()->get_select_machine_dialog() && plater()->get_select_machine_dialog()->IsShown()){
+                    return;
+                }
+
                 if (m_server_error_dialog->m_show_again) {
                     return;
                 }
@@ -2025,6 +2031,8 @@ void GUI_App::init_networking_callbacks()
                     obj->command_get_version();
                     obj->erase_user_access_code();
                     obj->command_get_access_code();
+                    if (m_agent)
+                        m_agent->install_device_cert(obj->dev_id, obj->is_lan_mode_printer());
                     if (!is_enable_multi_machine()) {
                         GUI::wxGetApp().sidebar().load_ams_list(obj->dev_id, obj);
                     }
@@ -2068,11 +2076,12 @@ void GUI_App::init_networking_callbacks()
                                 event.SetString(obj->dev_id);
                                 GUI::wxGetApp().sidebar().load_ams_list(obj->dev_id, obj);
                             } else if (state == ConnectStatus::ConnectStatusFailed) {
-                                obj->set_access_code("");
-                                obj->erase_user_access_code();
+                                m_device_manager->localMachineList.erase(obj->dev_id);
                                 m_device_manager->set_selected_machine("", true);
                                 wxString text;
                                 if (msg == "5") {
+                                    obj->set_access_code("");
+                                    obj->erase_user_access_code();
                                     text = wxString::Format(_L("Incorrect password"));
                                     wxGetApp().show_dialog(text);
                                 } else {
@@ -2081,9 +2090,9 @@ void GUI_App::init_networking_callbacks()
                                 }
                                 event.SetInt(-1);
                             } else if (state == ConnectStatus::ConnectStatusLost) {
-                                obj->set_access_code("");
-                                obj->erase_user_access_code();
-                                m_device_manager->localMachineList.erase(obj->dev_id);
+                                //obj->set_access_code("");
+                                //obj->erase_user_access_code();
+                                //m_device_manager->localMachineList.erase(obj->dev_id);
                                 m_device_manager->set_selected_machine("", true);
                                 event.SetInt(-1);
                                 BOOST_LOG_TRIVIAL(info) << "set_on_local_connect_fn: state = lost";
@@ -2123,6 +2132,8 @@ void GUI_App::init_networking_callbacks()
             CallAfter([this, dev_id, msg] {
                 if (m_is_closing)
                     return;
+                this->process_network_msg(dev_id, msg);
+
                 MachineObject* obj = this->m_device_manager->get_user_machine(dev_id);
                 if (obj) {
                     obj->is_ams_need_update = false;
@@ -2175,6 +2186,7 @@ void GUI_App::init_networking_callbacks()
                 if (m_is_closing)
                     return;
 
+                this->process_network_msg(dev_id, msg);
                 MachineObject* obj = m_device_manager->get_my_machine(dev_id);
                 if (!obj || !obj->is_lan_mode_printer()) {
                     obj = m_device_manager->get_local_machine(dev_id);
@@ -2439,7 +2451,7 @@ void GUI_App::on_start_subscribe_again(std::string dev_id)
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": dev_id=" << obj->dev_id;
         }
     });
-    start_subscribe_timer->Start(4000, wxTIMER_ONE_SHOT);
+    start_subscribe_timer->Start(5000, wxTIMER_ONE_SHOT);
 }
 
 std::string GUI_App::get_local_models_path()
@@ -4033,6 +4045,7 @@ std::string GUI_App::handle_web_request(std::string cmd)
 {
     try {
         //BBS use nlohmann json format
+        BOOST_LOG_TRIVIAL(info) << "handle_web_request: " << cmd;
         std::stringstream ss(cmd), oss;
         pt::ptree root, response;
         pt::read_json(ss, root);
@@ -4043,6 +4056,7 @@ std::string GUI_App::handle_web_request(std::string cmd)
         boost::optional<std::string> command = root.get_optional<std::string>("command");
         if (command.has_value()) {
             std::string command_str = command.value();
+            BOOST_LOG_TRIVIAL(info) << "handle_web_request: " << command_str;
             if (command_str.compare("request_project_download") == 0) {
                 if (root.get_child_optional("data") != boost::none) {
                     pt::ptree data_node = root.get_child("data");
@@ -4065,8 +4079,23 @@ std::string GUI_App::handle_web_request(std::string cmd)
                 CallAfter([this] {
                         get_login_info();
                     });
+                // TODO: Fix home page not emit get_recent_projects on macOS
+                #ifdef __WXOSX__
+                if (mainframe) {
+                    if (mainframe->m_webview) {
+                        mainframe->m_webview->SendRecentList(INT_MAX);
+                    }
+                }
+                #endif
             }
             else if (command_str.compare("homepage_login_or_register") == 0) {
+                //Check Plugin
+                bool bValid = is_compatibility_version();
+                if (!bValid) {
+                    CallAfter([this] { handle_web_request("{\"sequence_id\":1,\"command\":\"homepage_need_networkplugin\"}");
+                        });
+                    return "";
+                }
 
                 if (root.get_child_optional("makerworld_model_id") != boost::none) {
                     boost::optional<std::string> ModelID      = root.get_optional<std::string>("makerworld_model_id");
@@ -4108,11 +4137,11 @@ std::string GUI_App::handle_web_request(std::string cmd)
                 }
             }
             else if (command_str.compare("modelmall_model_advise_get") == 0) {
+                CallAfter([this] {
                 if (mainframe && this->app_config->get("staff_pick_switch") == "true") {
-                    if (mainframe->m_webview) {
-                            mainframe->m_webview->SendDesignStaffpick(has_model_mall());
-                    }
-                }
+                        if (mainframe->m_webview) { mainframe->m_webview->SendDesignStaffpick(has_model_mall()); }
+                    }                    
+                    });
             }
             else if (command_str.compare("modelmall_model_open") == 0) {
                 if (root.get_child_optional("data") != boost::none) {
@@ -4205,17 +4234,6 @@ std::string GUI_App::handle_web_request(std::string cmd)
                     }
                 }
             }
-            else if (command_str.compare("homepage_open_ccabin") == 0) {
-                if (root.get_child_optional("data") != boost::none) {
-                    pt::ptree                    data_node = root.get_child("data");
-                    boost::optional<std::string> path      = data_node.get_optional<std::string>("file");
-                    if (path.has_value()) {
-                        std::string Fullpath = resources_dir() + "/web/homepage/model/" + path.value();
-
-                        this->request_open_project(Fullpath);
-                    }
-                }
-            }
             else if (command_str.compare("common_openurl") == 0) {
                 boost::optional<std::string> path      = root.get_optional<std::string>("url");
                 if (path.has_value()) {
@@ -4244,7 +4262,9 @@ std::string GUI_App::handle_web_request(std::string cmd)
                 }
             }
             else if (command_str.compare("homepage_makerlab_get") == 0) {
+                CallAfter([this] {
                 if (mainframe && mainframe->m_webview) { mainframe->m_webview->SendMakerlabList(); }
+                    });                
             }
             else if (command_str.compare("homepage_makerlab_open") == 0) {
                 if (root.get_child_optional("url") != boost::none) {
@@ -4285,6 +4305,76 @@ std::string GUI_App::handle_web_request(std::string cmd)
                         wxString realurl = from_u8(url_decode(path.value()));
                         wxGetApp().request_model_download(realurl);
                     }
+                }
+            }
+            else if (command_str.compare("homepage_online_search") == 0) {
+                if (root.get_child_optional("keyword") != boost::none)
+                {
+                    std::string strKW = root.get_optional<std::string>("keyword").value();
+
+                    if (mainframe && mainframe->m_webview)
+                    {
+                        mainframe->m_webview->OpenMakerworldSearchPage(strKW);
+                    }
+                }
+            }
+            else if (command_str.compare("homepage_printhistory_click") == 0) {
+                if (root.get_child_optional("taskid") != boost::none) {
+                    int nTaskID = root.get<int>("taskid");
+
+                    if (mainframe && mainframe->m_webview)
+                    {
+                        mainframe->m_webview->SetPrintHistoryTaskID(nTaskID);
+                        mainframe->m_webview->SwitchLeftMenu("printhistory");
+                    }
+                }
+            }
+            else if (command_str.compare("homepage_printhistory_get")==0)
+            {
+                CallAfter([this] {
+                    if (mainframe && mainframe->m_webview) { mainframe->m_webview->ShowUserPrintTask(true); }                    
+                    });
+            }
+            else if (command_str.compare("homepage_leftmenu_change_width") == 0) {
+                int NewWidth = 214;
+                if (root.get_child_optional("width") != boost::none) NewWidth = root.get<int>("width");
+
+                if (mainframe && mainframe->m_webview)
+                {
+                    mainframe->m_webview->SetLeftMenuWidth(NewWidth);
+                    mainframe->m_webview->Layout();
+                }
+            }
+            else if (command_str.compare("homepage_makerlab_open_3mf_binary") == 0) {
+                 if (root.get_child_optional("3mf") != boost::none) {
+                    std::string str3MFBase64 = root.get_optional<std::string>("3mf").value();
+
+                    std::string str3MFName = "makerlab";
+                    if (root.get_child_optional("3mf_name") != boost::none)
+                    {
+                        std::string strTmp = from_u8(root.get_optional<std::string>("3mf_name").value()).ToStdString();
+                        if (strTmp != "") str3MFName = strTmp;
+                    }
+
+                    if (mainframe && mainframe->m_webview)
+                    {
+                        mainframe->m_webview->OpenMakerlab3mf(str3MFBase64,str3MFName);
+                    }
+                }
+            }
+            else if (command_str.compare("homepage_makerlab_stl_download")==0)
+            {
+                if (root.get_child_optional("file_data") != boost::none && root.get_child_optional("sequence_id") != boost::none) {
+                    int         SeqID        = root.get_optional<int>("sequence_id").value();
+                    std::string strSTLBase64 = root.get_optional<std::string>("file_data").value();
+
+                    std::string strSTLName = "makerlab";
+                    if (root.get_child_optional("file_name") != boost::none) {
+                        std::string strTmp = from_u8(root.get_optional<std::string>("file_name").value()).ToStdString();
+                        if (strTmp != "") strSTLName = strTmp;
+                    }
+
+                    if (mainframe && mainframe->m_webview) { mainframe->m_webview->SaveMakerlabStl(SeqID,strSTLBase64, strSTLName); }
                 }
             }
         }
@@ -4407,16 +4497,22 @@ void GUI_App::on_http_error(wxCommandEvent &evt)
 
     // Version limit
     if (code == HttpErrorVersionLimited) {
-        if (!m_show_http_errpr_msgdlg) {
+        if (!m_show_error_msgdlg) {
             MessageDialog msg_dlg(nullptr, _L("The Bambu Studio version is too old to enable cloud service. Please download the latest version from Bambu Lab website."), "", wxAPPLY | wxOK);
-            m_show_http_errpr_msgdlg = true;
+            m_show_error_msgdlg = true;
             auto modal_result = msg_dlg.ShowModal();
-            if (modal_result == wxOK || modal_result == wxCLOSE) {
-                m_show_http_errpr_msgdlg = false;
-                return;
-            }
+            m_show_error_msgdlg = false;
+            return;
         }
-
+    }
+    else if (status == 400 && code == HttpErrorCertRevoked) {
+        if (!m_show_error_msgdlg) {
+            MessageDialog msg_dlg(nullptr, _L("Your software certificate has been revoked, please update Bambu Studio software."), "", wxAPPLY | wxOK);
+            m_show_error_msgdlg = true;
+            auto modal_result = msg_dlg.ShowModal();
+            m_show_error_msgdlg = false;
+            return;
+        }
     }
 
     // request login
@@ -4424,15 +4520,12 @@ void GUI_App::on_http_error(wxCommandEvent &evt)
         if (m_agent) {
             if (m_agent->is_user_login()) {
                 this->request_user_logout();
-
-                if (!m_show_http_errpr_msgdlg) {
+                if (!m_show_error_msgdlg) {
                     MessageDialog msg_dlg(nullptr, _L("Login information expired. Please login again."), "", wxAPPLY | wxOK);
-                    m_show_http_errpr_msgdlg = true;
+                    m_show_error_msgdlg = true;
                     auto modal_result = msg_dlg.ShowModal();
-                    if (modal_result == wxOK || modal_result == wxCLOSE) {
-                        m_show_http_errpr_msgdlg = false;
-                        return;
-                    }
+                    m_show_error_msgdlg = false;
+                    return;
                 }
             }
         }
@@ -4551,10 +4644,12 @@ void GUI_App::reset_to_active()
     last_active_point = std::chrono::system_clock::now();
 }
 
-void GUI_App::check_update(bool show_tips, int by_user, VersionUpdateType type)
+void GUI_App::check_update(bool show_tips, int by_user)
 {
-    if (version_info.version_str.empty()) return;
-    if (version_info.url.empty()) return;
+    if (version_info.version_str.empty() || version_info.url.empty()) {
+        check_beta_version();
+        return;
+    }
 
     auto curr_version = Semver::parse(SLIC3R_VERSION);
     auto remote_version = Semver::parse(version_info.version_str);
@@ -4572,17 +4667,12 @@ void GUI_App::check_update(bool show_tips, int by_user, VersionUpdateType type)
         }
     } else {
         wxGetApp().app_config->set("upgrade", "force_upgrade", false);
-        if (app_config->get("enable_beta_version_update") == "true"){
-            if (type == ReleaseVersionUpdate){
-                check_beta_version(show_tips, by_user);
-            }
-            else if (type == BetaVersionUpdate){
-                this->no_new_version();
-            }
-        }
-        else{
+
+        if (show_tips) {
             this->no_new_version();
         }
+
+        check_beta_version();
     }
 }
 
@@ -4616,8 +4706,11 @@ void GUI_App::check_new_version(bool show_tips, int by_user)
             if (j.contains("message")) {
                 if (j["message"].get<std::string>() == "success") {
                     if (j.contains("software")) {
-                        if (j["software"].empty() && show_tips) {
-                            this->no_new_version();
+                        if (j["software"].empty()) {
+                            if (show_tips) {
+                                this->no_new_version();
+                            }
+                            check_beta_version();
                         }
                         else {
                             if (j["software"].contains("url")
@@ -4648,7 +4741,12 @@ void GUI_App::check_new_version(bool show_tips, int by_user)
     }).perform();
 }
 
-void GUI_App::check_beta_version(bool show_tips, int by_user) {
+void GUI_App::check_beta_version()
+{
+    if (app_config->get("enable_beta_version_update") != "true") {
+        return;
+    }
+
     std::string platform = "windows";
 
 #ifdef __WINDOWS__
@@ -4671,7 +4769,7 @@ void GUI_App::check_beta_version(bool show_tips, int by_user) {
     http.header("accept", "application/json")
         .timeout_connect(TIMEOUT_CONNECT)
         .timeout_max(TIMEOUT_RESPONSE)
-        .on_complete([this, show_tips, by_user, platform](std::string body, unsigned) {
+        .on_complete([this, platform](std::string body, unsigned) {
         try {
             json versions = json::parse(body, nullptr, false);
             for (auto version : versions){
@@ -4697,15 +4795,24 @@ void GUI_App::check_beta_version(bool show_tips, int by_user) {
                                     version_info.url = url;
                                     version_info.description = "###" + std::string(version["html_url"]) + "###";
                                     version_info.force_upgrade = false;
-                                    CallAfter([this, show_tips, by_user]() {
-                                        this->check_update(show_tips, by_user, BetaVersionUpdate);
-                                        });
-                                    return;
+                                    CallAfter([this]() {
+
+                                        if (version_info.version_str.empty() || version_info.url.empty()) {
+                                            return;
+                                        }
+
+                                        auto curr_version   = Semver::parse(SLIC3R_VERSION);
+                                        auto remote_version = Semver::parse(version_info.version_str);
+                                        if (curr_version && remote_version && (*remote_version > *curr_version)) {
+                                            GUI::wxGetApp().request_new_version(false);
+                                        }
+                                    });
                                 }
                             }
                         }
                     }
                 }
+                return;
             }
         }
         catch (...) {
@@ -4718,6 +4825,81 @@ void GUI_App::check_beta_version(bool show_tips, int by_user) {
             }).perform();
 }
 
+void GUI_App::check_cert()
+{
+    m_check_cert_thread = Slic3r::create_thread(
+        [this]{
+            if (m_agent)
+                m_agent->check_cert();
+        });
+    BOOST_LOG_TRIVIAL(info) << "check_cert";
+}
+
+void GUI_App::process_network_msg(std::string dev_id, std::string msg)
+{
+    if (dev_id.empty()) {
+        if (msg == "wait_info") {
+            BOOST_LOG_TRIVIAL(info) << "process_network_msg, wait_info";
+            Slic3r::DeviceManager* dev = Slic3r::GUI::wxGetApp().getDeviceManager();
+            if (!dev)
+                return;
+            MachineObject* obj = dev->get_selected_machine();
+            if (obj)
+                m_agent->install_device_cert(obj->dev_id, obj->is_lan_mode_printer());
+            if (!m_show_error_msgdlg) {
+                MessageDialog msg_dlg(nullptr, _L("Retrieving printer information, please try again later."), "", wxAPPLY | wxOK);
+                m_show_error_msgdlg = true;
+                auto modal_result = msg_dlg.ShowModal();
+                m_show_error_msgdlg = false;
+            }
+        }
+        else if (msg == "update_studio") {
+            BOOST_LOG_TRIVIAL(info) << "process_network_msg, update_studio";
+            if (!m_show_error_msgdlg) {
+                MessageDialog msg_dlg(nullptr, _L("Please try updating Bambu Studio and then try again."), "", wxAPPLY | wxOK);
+                m_show_error_msgdlg = true;
+                auto modal_result = msg_dlg.ShowModal();
+                m_show_error_msgdlg = false;
+            }
+        }
+        else if (msg == "update_fixed_studio") {
+            BOOST_LOG_TRIVIAL(info) << "process_network_msg, update_fixed_studio";
+            if (!m_show_error_msgdlg) {
+                MessageDialog msg_dlg(nullptr, _L("Please try updating Bambu Studio and then try again."), "", wxAPPLY | wxOK);
+                m_show_error_msgdlg = true;
+                auto modal_result = msg_dlg.ShowModal();
+                m_show_error_msgdlg = false;
+            }
+        }
+        else if (msg == "cert_expired") {
+            BOOST_LOG_TRIVIAL(info) << "process_network_msg, cert_expired";
+            if (!m_show_error_msgdlg) {
+                MessageDialog msg_dlg(nullptr, _L("The certificate has expired. Please check the time settings or update Bambu Studio and try again."), "", wxAPPLY | wxOK);
+                m_show_error_msgdlg = true;
+                auto modal_result = msg_dlg.ShowModal();
+                m_show_error_msgdlg = false;
+            }
+        }
+        else if (msg == "cert_revoked") {
+            BOOST_LOG_TRIVIAL(info) << "process_network_msg, cert_revoked";
+            if (!m_show_error_msgdlg) {
+                MessageDialog msg_dlg(nullptr, _L("The certificate is no longer valid and the printing functions are unavailable. If you need printing. Please visit the official website at https://bambulab.com/ to download and update."), "", wxAPPLY | wxOK);
+                m_show_error_msgdlg = true;
+                auto modal_result = msg_dlg.ShowModal();
+                m_show_error_msgdlg = false;
+            }
+        }
+        else if (msg == "update_firmware_studio") {
+            BOOST_LOG_TRIVIAL(info) << "process_network_msg, firmware internal error";
+            if (!m_show_error_msgdlg) {
+                MessageDialog msg_dlg(nullptr, _L("Internal error. Please try upgrading the firmware and Studio version. If the issue persists, contact customer support."), "", wxAPPLY | wxOK);
+                m_show_error_msgdlg = true;
+                auto modal_result = msg_dlg.ShowModal();
+                m_show_error_msgdlg = false;
+            }
+        }
+    }
+}
 
 //BBS pop up a dialog and download files
 void GUI_App::request_new_version(int by_user)

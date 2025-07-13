@@ -1,4 +1,3 @@
-#include <math.h>
 #include <chrono>
 #include <math.h>
 
@@ -219,6 +218,7 @@ static void draw_contours_and_nodes_to_svg
 
     // draw layer nodes
     svg.draw(layer_pts, "green", coord_t(scale_(0.1)));
+    for (SupportNode *node : layer_nodes) { svg.draw({node->overhang}, "green", 0.5); }
 
     // lower layer points
     layer_pts.clear();
@@ -227,13 +227,13 @@ static void draw_contours_and_nodes_to_svg
     }
     svg.draw(layer_pts, "black", coord_t(scale_(0.1)));
 
-    // higher layer points
-    layer_pts.clear();
-    for (SupportNode* node : layer_nodes) {
-        if(node->parent)
-            layer_pts.push_back(node->parent->position);
-    }
-    svg.draw(layer_pts, "blue", coord_t(scale_(0.1)));
+    //// higher layer points
+    //layer_pts.clear();
+    //for (SupportNode* node : layer_nodes) {
+    //    if(node->parent)
+    //        layer_pts.push_back(node->parent->position);
+    //}
+    //svg.draw(layer_pts, "blue", coord_t(scale_(0.1)));
 }
 
 static void draw_layer_mst
@@ -1645,6 +1645,8 @@ void TreeSupport::move_bounds_to_contact_nodes(std::vector<TreeSupport3D::Suppor
 
 void TreeSupport::generate()
 {
+    if (!is_tree(m_object_config->support_type.value)) return;
+
     if (m_support_params.support_style == smsTreeOrganic) {
         generate_tree_support_3D(*m_object, this, this->throw_on_cancel);
         return;
@@ -2076,8 +2078,7 @@ void TreeSupport::draw_circles()
                             area = offset_ex({ node.overhang }, scale_(m_ts_data->m_xy_distance));
                         }
                         area = diff_clipped(area, get_collision(node.is_sharp_tail && node.distance_to_top <= 0));
-                        if (node.type == ePolygon)
-                            area_poly = area;
+                        if (node.type == ePolygon) append(area_poly, area);
                     }
                     else {
                         Polygon circle(branch_circle);
@@ -2108,6 +2109,12 @@ void TreeSupport::draw_circles()
                             if(!tmp.empty())
                                 circle = tmp[0];
                         }
+                        area = avoid_object_remove_extra_small_parts(ExPolygon(circle), get_collision(node.is_sharp_tail && node.distance_to_top <= 0));
+                        // area = diff_clipped({ ExPolygon(circle) }, get_collision(node.is_sharp_tail && node.distance_to_top <= 0));
+
+                        if (!area.empty()) has_circle_node = true;
+                        if (node.need_extra_wall) need_extra_wall = true;
+
                         // merge overhang to get a smoother interface surface
                         // Do not merge when buildplate_only is on, because some underneath nodes may have been deleted.
                         if (top_interface_layers > 0 && node.support_roof_layers_below > 0 && !on_buildplate_only && !node.is_sharp_tail) {
@@ -2119,14 +2126,6 @@ void TreeSupport::draw_circles()
                             }
                             append(area, overhang_expanded);
                         }
-
-                        area = avoid_object_remove_extra_small_parts(ExPolygon(circle), get_collision(node.is_sharp_tail && node.distance_to_top <= 0));
-                        //area = diff_clipped({ ExPolygon(circle) }, get_collision(node.is_sharp_tail && node.distance_to_top <= 0));
-
-                        if (!area.empty())
-                            has_circle_node = true;
-                        if(node.need_extra_wall)
-                            need_extra_wall = true;
                     }
 
                     if (obj_layer_nr>0 && node.distance_to_top < 0)
@@ -2202,17 +2201,25 @@ void TreeSupport::draw_circles()
                     }
                 }
                 auto &area_groups = ts_layer->area_groups;
-                for (auto& area : ts_layer->base_areas) {
-                    area_groups.emplace_back(&area, SupportLayer::BaseType, max_layers_above_base);
-                    area_groups.back().need_infill = overlaps({ area }, area_poly);
+                for (auto& expoly : ts_layer->base_areas) {
+                    //if (area(expoly) < SQ(scale_(1))) continue;
+                    area_groups.emplace_back(&expoly, SupportLayer::BaseType, max_layers_above_base);
+                    area_groups.back().need_infill = overlaps({ expoly }, area_poly);
                     area_groups.back().need_extra_wall = need_extra_wall && !area_groups.back().need_infill;
                 }
-                for (auto& area : ts_layer->roof_areas) {
-                    area_groups.emplace_back(&area, SupportLayer::RoofType, max_layers_above_roof);
+                for (auto& expoly : ts_layer->roof_areas) {
+                    //if (area(expoly) < SQ(scale_(1))) continue;
+                    area_groups.emplace_back(&expoly, SupportLayer::RoofType, max_layers_above_roof);
                     area_groups.back().interface_id = interface_id;
                 }
-                for (auto &area : ts_layer->floor_areas) area_groups.emplace_back(&area, SupportLayer::FloorType, 10000);
-                for (auto &area : ts_layer->roof_1st_layer) area_groups.emplace_back(&area, SupportLayer::Roof1stLayer, max_layers_above_roof1);
+                for (auto &expoly : ts_layer->floor_areas) {
+                    //if (area(expoly) < SQ(scale_(1))) continue;
+                    area_groups.emplace_back(&expoly, SupportLayer::FloorType, 10000);
+                }
+                for (auto &expoly : ts_layer->roof_1st_layer) {
+                    //if (area(expoly) < SQ(scale_(1))) continue;
+                    area_groups.emplace_back(&expoly, SupportLayer::Roof1stLayer, max_layers_above_roof1);
+                }
 
                 for (auto &area_group : area_groups) {
                     auto& expoly = area_group.area;
@@ -2892,7 +2899,7 @@ void TreeSupport::drop_nodes()
                     }
                 }
                 auto              next_collision = get_collision(0, obj_layer_nr_next);
-                const bool   to_buildplate  = !is_inside_ex(next_collision, next_layer_vertex);
+                const bool   to_buildplate  = !is_inside_ex(m_ts_data->m_layer_outlines[obj_layer_nr_next], next_layer_vertex);
                 SupportNode *     next_node     = m_ts_data->create_node(next_layer_vertex, node.distance_to_top + 1, obj_layer_nr_next, node.support_roof_layers_below - 1, to_buildplate, p_node,
                     print_z_next, height_next);
                 // don't increase radius if next node will collide partially with the object (STUDIO-7883)
@@ -3251,9 +3258,11 @@ std::vector<LayerHeightData> TreeSupport::plan_layer_heights()
     for (int layer_nr = 0; layer_nr < contact_nodes.size(); layer_nr++) {
         if (contact_nodes[layer_nr].empty()) continue;
         SupportNode *node1 = contact_nodes[layer_nr].front();
-        auto         it    = z_heights.lower_bound(node1->print_z - EPSILON);
-        if (it == z_heights.end()) it = std::prev(it);
-        int layer_nr2 = std::distance(z_heights.begin(), it);
+        auto         it    = std::min_element(layer_heights.begin(), layer_heights.end(), [node1](const LayerHeightData &l1, const LayerHeightData &l2) {
+            return std::abs(l1.print_z - node1->print_z) < std::abs(l2.print_z - node1->print_z);
+        });
+        if (it == layer_heights.end()) it = std::prev(it);
+        int layer_nr2 = std::distance(layer_heights.begin(), it);
         contact_nodes2[layer_nr2].insert(contact_nodes2[layer_nr2].end(), contact_nodes[layer_nr].begin(), contact_nodes[layer_nr].end());
     }
     contact_nodes = contact_nodes2;
@@ -3267,6 +3276,7 @@ std::vector<LayerHeightData> TreeSupport::plan_layer_heights()
                                  << ", object_layer_zs[" << layer_heights[layer_nr].obj_layer_nr << "]=" << m_object->get_layer(layer_heights[layer_nr].obj_layer_nr)->print_z;
         coordf_t new_height = layer_heights[layer_nr].height;
         if (std::abs(node1->height - new_height) < EPSILON) continue;
+        if (top_z_distance < EPSILON && node1->height < EPSILON) continue; // top_z_distance==0, this is soluable interface
         coordf_t              accum_height = 0;
         int                   num_layers   = 0;
         for (int i=layer_nr;i>=0;i--){
@@ -3276,7 +3286,7 @@ std::vector<LayerHeightData> TreeSupport::plan_layer_heights()
                 if (accum_height > node1->height - EPSILON) break;
             }
         }
-        BOOST_LOG_TRIVIAL(debug) << format("plan_layer_heights adjust node's height %d %.2f: (%.3f,%d)->(%.3f,%.3f,%d)", layer_nr, node1->print_z,
+        BOOST_LOG_TRIVIAL(debug) << format("plan_layer_heights adjust node's height print_z[%d]=%.2f: (%.3f,%d)->(%.3f,%.3f,%d)", layer_nr, node1->print_z,
             node1->height, node1->distance_to_top, new_height, accum_height, -num_layers);
         for (SupportNode *node : contact_nodes[layer_nr]) {
             node->height          = new_height;
@@ -3340,9 +3350,6 @@ void TreeSupport::generate_contact_points()
   //  }
     const int z_distance_top_layers = round_up_divide(scale_(z_distance_top), scale_(layer_height)) + 1; //Support must always be 1 layer below overhang.
     int gap_layers = z_distance_top == 0 ? 0 : 1;
-    // virtual layer with 0 height will be deleted
-    if (z_distance_top == 0)
-        z_distance_top = 0.001;
 
     size_t support_roof_layers = config.support_interface_top_layers.value;
     if (support_roof_layers > 0)
@@ -3497,6 +3504,7 @@ void TreeSupport::generate_contact_points()
             if (!curr_nodes.empty()) nonempty_layers++;
             for (auto node : curr_nodes) { all_nodes.emplace_back(node->position(0), node->position(1), scale_(node->print_z)); }
 #ifdef SUPPORT_TREE_DEBUG_TO_SVG
+            if (!curr_nodes.empty())
             draw_contours_and_nodes_to_svg(debug_out_path("init_contact_points_%.2f.svg", bottom_z), layer->loverhangs,layer->lslices_extrudable, m_ts_data->m_layer_outlines_below[layer_nr],
                 contact_nodes[layer_nr], contact_nodes[layer_nr - 1], { "overhang","lslices","outlines_below"});
 #endif

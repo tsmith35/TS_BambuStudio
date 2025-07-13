@@ -38,8 +38,13 @@ struct SupportParameters {
 	            this->num_top_base_interface_layers    = size_t(std::min(int(num_top_interface_layers) / 2, 2));
 	            this->num_bottom_base_interface_layers = size_t(std::min(int(num_bottom_interface_layers) / 2, 2));
 	        } else {
-	            this->num_top_base_interface_layers    = 0;
-	            this->num_bottom_base_interface_layers = 0;
+                // BBS: if support interface and support base do not use the same filament, add a base layer to improve their adhesion
+                // Note: support materials (such as Supp.W) can't be used as support base now, so support interface and base are still using different filaments even if
+                // support_filament==0
+                bool differnt_support_interface_filament = object_config.support_interface_filament != 0 &&
+                                                           object_config.support_interface_filament != object_config.support_filament;
+                this->num_top_base_interface_layers    = differnt_support_interface_filament ? 1 : 0;
+                this->num_bottom_base_interface_layers       = differnt_support_interface_filament ? 1 : 0;
 	        }
 	    }
         this->first_layer_flow = Slic3r::support_material_1st_layer_flow(&object, float(slicing_params.first_print_layer_height));
@@ -166,6 +171,12 @@ struct SupportParameters {
                                                                                                           std::numeric_limits<double>::max();
 
         support_style = object_config.support_style;
+        if (support_style != smsDefault) {
+            if ((support_style == smsSnug || support_style == smsGrid) && is_tree(object_config.support_type)) support_style = smsDefault;
+            if ((support_style == smsTreeSlim || support_style == smsTreeStrong || support_style == smsTreeHybrid || support_style == smsTreeOrganic) &&
+                !is_tree(object_config.support_type))
+                support_style = smsDefault;
+        }
         if (support_style == smsDefault) {
             if (is_tree(object_config.support_type)) {
                 // organic support doesn't work with variable layer heights (including adaptive layer height and height range modifier, see #4313)
