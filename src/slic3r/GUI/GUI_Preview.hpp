@@ -12,6 +12,7 @@
 #include <string>
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include <slic3r/GUI/GCodeViewer.hpp>
+#include <memory>
 
 class wxGLCanvas;
 class wxBoxSizer;
@@ -38,17 +39,26 @@ class Plater;
 class BitmapComboBox;
 #endif
 
-class View3D : public wxPanel
+class BaseView : public wxPanel
 {
+public:
+    explicit BaseView();
+    virtual ~BaseView();
+    wxGLCanvas* get_wxglcanvas() { return m_canvas_widget; }
+    GLCanvas3D* get_canvas3d() { return m_canvas; }
+    bool Show(bool show);
+    const std::shared_ptr<Camera>& get_override_camera() const;
+protected:
     wxGLCanvas* m_canvas_widget;
     GLCanvas3D* m_canvas;
+    std::shared_ptr<Camera> m_p_override_camera{ nullptr };
+};
 
+class View3D : public BaseView
+{
 public:
     View3D(wxWindow* parent, Bed3D& bed, Model* model, DynamicPrintConfig* config, BackgroundSlicingProcess* process);
     virtual ~View3D();
-
-    wxGLCanvas* get_wxglcanvas() { return m_canvas_widget; }
-    GLCanvas3D* get_canvas3d() { return m_canvas; }
 
     void set_as_dirty();
     void bed_shape_changed();
@@ -83,10 +93,8 @@ private:
     bool init(wxWindow* parent, Bed3D& bed, Model* model, DynamicPrintConfig* config, BackgroundSlicingProcess* process);
 };
 
-class Preview : public wxPanel
+class Preview : public BaseView
 {
-    wxGLCanvas* m_canvas_widget { nullptr };
-    GLCanvas3D* m_canvas { nullptr };
     DynamicPrintConfig* m_config;
     BackgroundSlicingProcess* m_process;
     GCodeProcessorResult* m_gcode_result;
@@ -127,15 +135,12 @@ public:
         Legend
     };
 
-    Preview(wxWindow* parent, Bed3D& bed, Model* model, DynamicPrintConfig* config, BackgroundSlicingProcess* process, 
+    Preview(wxWindow* parent, Bed3D& bed, Model* model, DynamicPrintConfig* config, BackgroundSlicingProcess* process,
         GCodeProcessorResult* gcode_result, std::function<void()> schedule_background_process = []() {});
     virtual ~Preview();
 
     //BBS: update gcode_result
     void update_gcode_result(GCodeProcessorResult* gcode_result);
-
-    wxGLCanvas* get_wxglcanvas() { return m_canvas_widget; }
-    GLCanvas3D* get_canvas3d() { return m_canvas; }
 
     void set_as_dirty();
 
@@ -175,7 +180,7 @@ private:
     void check_layers_slider_values(std::vector<CustomGCode::Item>& ticks_from_model,
         const std::vector<double>& layers_z);
 
-    void update_layers_slider(const std::vector<double>& layers_z, bool keep_z_range = false);    
+    void update_layers_slider(const std::vector<double>& layers_z, bool keep_z_range = false);
     void update_layers_slider_mode();
     void update_layers_slider_from_canvas(wxKeyEvent &event);
     //BBS: add only gcode mode
@@ -183,16 +188,11 @@ private:
 };
 
 
-class AssembleView : public wxPanel
+class AssembleView : public BaseView
 {
-    wxGLCanvas* m_canvas_widget{ nullptr };
-    GLCanvas3D* m_canvas{ nullptr };
 public:
     AssembleView(wxWindow* parent, Bed3D& bed, Model* model, DynamicPrintConfig* config, BackgroundSlicingProcess* process);
     ~AssembleView();
-
-    wxGLCanvas* get_wxglcanvas() { return m_canvas_widget; }
-    GLCanvas3D* get_canvas3d() { return m_canvas; }
 
     void set_as_dirty();
     void render();

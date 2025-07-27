@@ -161,8 +161,7 @@ public:
     public:
         HeightRange() = delete;
         // BBS: set cursor_radius to 0.1 for high smooth edge
-        explicit HeightRange(float z_world_, const Vec3f& source_, float height_, const Transform3d& trafo_, const ClippingPlane& clipping_plane_)
-            : SinglePointCursor(Vec3f(0.f, 0.f, 0.f), source_, 1.f, trafo_, clipping_plane_), m_z_world(z_world_), m_height(height_) {}
+        explicit HeightRange(float z_world_, const Vec3f &source_, float height_, const Transform3d &trafo_, const ClippingPlane &clipping_plane_);
         ~HeightRange() override = default;
 
         bool is_pointer_in_triangle(const Vec3f& p1, const Vec3f& p2, const Vec3f& p3) const override;
@@ -258,7 +257,7 @@ public:
     indexed_triangle_set get_facets_strict(EnforcerBlockerType state) const;
     // Get edges around the selected area by seed fill.
     std::vector<Vec2i> get_seed_fill_contour() const;
-
+    indexed_triangle_set get_seed_fill_mesh(int& state) const;
     // BBS
     void get_facets(std::vector<indexed_triangle_set>& facets_per_type) const;
 
@@ -276,7 +275,11 @@ public:
     std::pair<std::vector<std::pair<int, int>>, std::vector<bool>> serialize() const;
 
     // Load serialized data. Assumes that correct mesh is loaded.
-    void deserialize(const std::pair<std::vector<std::pair<int, int>>, std::vector<bool>>& data, bool needs_reset = true, EnforcerBlockerType max_ebt = EnforcerBlockerType::ExtruderMax);
+    void deserialize(const std::pair<std::vector<std::pair<int, int>>, std::vector<bool>> &data,
+                     bool                                                                  needs_reset = true,
+                     EnforcerBlockerType                                                   max_ebt     = EnforcerBlockerType::ExtruderMax,
+                     EnforcerBlockerType                                                   to_delete_filament = EnforcerBlockerType::NONE,
+                     EnforcerBlockerType                                                   replace_filament = EnforcerBlockerType::NONE);
 
     // For all triangles, remove the flag indicating that the triangle was selected by seed fill.
     void seed_fill_unselect_all_triangles();
@@ -317,10 +320,10 @@ protected:
         EnforcerBlockerType get_state() const { assert(! is_split()); return state; }
 
         // Set if the triangle has been selected or unselected by seed fill.
-        void select_by_seed_fill() { assert(! is_split()); m_selected_by_seed_fill = true; }
-        void unselect_by_seed_fill() { assert(! is_split()); m_selected_by_seed_fill = false; }
+        void select_by_seed_fill();
+        void unselect_by_seed_fill();
         // Get if the triangle has been selected or not by seed fill.
-        bool is_selected_by_seed_fill() const { assert(! is_split()); return m_selected_by_seed_fill; }
+        bool is_selected_by_seed_fill() const;
 
         // Is this triangle valid or marked to be removed?
         bool valid() const noexcept { return m_valid; }
@@ -410,7 +413,7 @@ private:
 
     //void append_touching_subtriangles(int itriangle, int vertexi, int vertexj, std::vector<int> &touching_subtriangles_out) const;
     void append_touching_edges(int itriangle, int vertexi, int vertexj, std::vector<Vec2i> &touching_edges_out) const;
-
+    void append_touching_its(int itriangle, indexed_triangle_set &its) const;
 #ifndef NDEBUG
     //bool verify_triangle_neighbors(const Triangle& tr, const Vec3i& neighbors) const;
     bool verify_triangle_midpoints(const Triangle& tr) const;
@@ -423,6 +426,7 @@ private:
         std::vector<stl_triangle_vertex_indices>    &out_triangles) const;
     void get_facets_split_by_tjoints(const Vec3i &vertices, const Vec3i &neighbors, std::vector<stl_triangle_vertex_indices> &out_triangles) const;
 
+    void get_seed_fill_its_recursive(int facet_idx, const Vec3i &neighbors, const Vec3i &neighbors_propagated, std::set<int> &idx_set, indexed_triangle_set &its, int &state) const;
     void get_seed_fill_contour_recursive(int facet_idx, const Vec3i &neighbors, const Vec3i &neighbors_propagated, std::vector<Vec2i> &edges_out) const;
 
     int m_free_triangles_head { -1 };

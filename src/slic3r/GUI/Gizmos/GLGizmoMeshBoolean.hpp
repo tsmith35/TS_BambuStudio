@@ -38,7 +38,7 @@ struct VolumeInfo {
 class GLGizmoMeshBoolean : public GLGizmoBase
 {
 public:
-    GLGizmoMeshBoolean(GLCanvas3D& parent, const std::string& icon_filename, unsigned int sprite_id);
+    GLGizmoMeshBoolean(GLCanvas3D& parent, unsigned int sprite_id);
     ~GLGizmoMeshBoolean();
 
     void set_enable(bool enable) { m_enable = enable; }
@@ -47,7 +47,9 @@ public:
     void set_src_volume(ModelVolume* mv);
     void set_tool_volume(ModelVolume* mv);
 
-    bool gizmo_event(SLAGizmoEventType action, const Vec2d& mouse_position, bool shift_down, bool alt_down, bool control_down);
+    bool gizmo_event(SLAGizmoEventType action, const Vec2d& mouse_position, bool shift_down, bool alt_down, bool control_down) override;
+
+    std::string get_icon_filename(bool b_dark_mode) const override;
 
 protected:
     virtual bool on_init() override;
@@ -59,12 +61,13 @@ protected:
     virtual void on_set_state() override;
     virtual CommonGizmosDataID on_get_requirements() const override;
     virtual void on_render_input_window(float x, float y, float bottom_limit);
-    virtual void render_input_window_warning(const std::string &text);
+    virtual void render_input_window_warning(const std::string &text,int width);
     void on_load(cereal::BinaryInputArchive &ar) override;
     void on_save(cereal::BinaryOutputArchive &ar) const override;
 
 private:
     bool m_enable{ false };
+    int                  m_full_width;
     MeshBooleanOperation m_operation_mode;
     MeshBooleanSelectingState m_selecting_state;
     bool m_diff_delete_input = false;

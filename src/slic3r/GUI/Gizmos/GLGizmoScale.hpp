@@ -27,9 +27,8 @@ class GLGizmoScale3D : public GLGizmoBase
         BoundingBoxf3 box;
         Vec3d pivots[6];// Vec3d constraint_position{Vec3d::Zero()};
         Vec3d local_pivots[6];
-        bool ctrl_down;
 
-        StartingData() : scale(Vec3d::Ones()), drag_position(Vec3d::Zero()), ctrl_down(false) { for (int i = 0; i < 5; ++i) { pivots[i] = Vec3d::Zero(); } }
+        StartingData() : scale(Vec3d::Ones()), drag_position(Vec3d::Zero()) { for (int i = 0; i < 5; ++i) { pivots[i] = Vec3d::Zero(); } }
     };
 
     mutable BoundingBoxf3 m_bounding_box;
@@ -44,10 +43,19 @@ class GLGizmoScale3D : public GLGizmoBase
     //BBS: add size adjust related
     GizmoObjectManipulation* m_object_manipulation;
 
+    struct GrabberConnection
+    {
+        GLModel model;
+        std::pair<unsigned int, unsigned int> grabber_indices;
+        Vec3d old_v1{ Vec3d::Zero() };
+        Vec3d old_v2{ Vec3d::Zero() };
+    };
+    mutable std::array<GrabberConnection, 7> m_grabber_connections;
+
 public:
     //BBS: add obj manipulation logic
     //GLGizmoScale3D(GLCanvas3D& parent, const std::string& icon_filename, unsigned int sprite_id);
-    GLGizmoScale3D(GLCanvas3D& parent, const std::string& icon_filename, unsigned int sprite_id, GizmoObjectManipulation* obj_manipulation);
+    GLGizmoScale3D(GLCanvas3D& parent, unsigned int sprite_id, GizmoObjectManipulation* obj_manipulation);
 
     double get_snap_step(double step) const { return m_snap_step; }
     void set_snap_step(double step) { m_snap_step = step; }
@@ -60,6 +68,11 @@ public:
     std::string get_tooltip() const override;
     void        data_changed(bool is_serializing) override;
     void enable_ununiversal_scale(bool enable);
+    BoundingBoxf3 get_bounding_box() const override;
+
+    bool on_key(const wxKeyEvent& key_event) override;
+
+    std::string get_icon_filename(bool b_dark_mode) const override;
 protected:
     virtual bool on_init() override;
     virtual std::string on_get_name() const override;
@@ -74,7 +87,7 @@ protected:
     //BBS: GUI refactor: add object manipulation
     virtual void on_render_input_window(float x, float y, float bottom_limit);
 private:
-    void render_grabbers_connection(unsigned int id_1, unsigned int id_2) const;
+    void render_grabbers_connection(unsigned int id_1, unsigned int id_2, const ColorRGBA& color) const;
 
     void do_scale_along_axis(Axis axis, const UpdateData& data);
     void do_scale_uniform(const UpdateData& data);
@@ -82,8 +95,14 @@ private:
     double calc_ratio(const UpdateData& data) const;
     void   update_grabbers_data();
     void   change_cs_by_selection(); // cs mean Coordinate System
+    void set_asymmetric_scalling_enable(bool is_enabled);
+    bool is_asymmetric_scalling_enabled() const;
+    void lock_scalling_mode(bool is_locked);
+    bool is_scalling_mode_locked() const;
 private:
     int m_last_selected_obejct_idx, m_last_selected_volume_idx;
+    bool m_b_asymmetric_scalling{ false };
+    bool m_b_scalling_mode_locked{ false };
 };
 
 

@@ -79,6 +79,8 @@ public:
     wxMenu* assemble_part_menu();
     wxMenu* assemble_multi_selection_menu();
 
+    wxMenu *filament_action_menu(int active_filament_menu_id);
+
 private:
     enum MenuType {
         mtObjectFFF = 0,
@@ -100,6 +102,8 @@ private:
     MenuWithSeparators m_plate_menu;
     MenuWithSeparators m_assemble_object_menu;
     MenuWithSeparators m_assemble_part_menu;
+
+    wxMenu m_filament_action_menu;
 
     int object_menu_count{ 0 };
     int part_menu_count{ 0 };
@@ -129,6 +133,8 @@ private:
     void        create_bbl_assemble_object_menu();
     void        create_bbl_assemble_part_menu();
     void        create_cut_cutter_menu();
+
+    void        create_filament_action_menu(bool init, int active_filament_menu_id);
 
     wxMenu*     append_submenu_add_generic(wxMenu* menu, ModelVolumeType type);
     void        append_menu_item_add_svg(wxMenu *menu, ModelVolumeType type, bool is_submenu_item = true);
@@ -165,6 +171,7 @@ private:
     void        append_menu_item_clone(wxMenu* menu);
     void        append_menu_item_simplify(wxMenu* menu);
     void        append_menu_item_center(wxMenu* menu);
+    void        append_menu_item_sub_merge(wxMenu *menu);
     void        append_menu_item_per_object_process(wxMenu* menu);
     void        append_menu_item_per_object_settings(wxMenu* menu);
     void        append_menu_item_change_filament(wxMenu* menu);

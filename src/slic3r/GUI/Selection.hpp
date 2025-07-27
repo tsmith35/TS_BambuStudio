@@ -265,7 +265,7 @@ private:
 
     std::optional<std::pair<Vec3d, double>> m_bounding_sphere;
 #if ENABLE_RENDER_SELECTION_CENTER
-    GLModel m_vbo_sphere;
+    mutable GLModel m_vbo_sphere;
 #endif // ENABLE_RENDER_SELECTION_CENTER
 
     GLModel m_arrow;
@@ -279,6 +279,8 @@ private:
     bool m_volume_selection_locked { false };
     std::vector<Transform3d> m_trafo_matrices;
 
+    mutable GLModel m_bounding_box_model;
+    mutable GLModel m_sidebar_layers_hints_model;
 public:
     Selection();
 
@@ -356,6 +358,7 @@ public:
     bool is_from_single_object() const;
     bool is_sla_compliant() const;
     bool is_instance_mode() const { return m_mode == Instance; }
+    bool has_emboss_shape() const;
 
     bool contains_volume(unsigned int volume_idx) const { return m_list.find(volume_idx) != m_list.end(); }
     // returns true if the selection contains all the given indices
@@ -378,7 +381,8 @@ public:
     const IndicesList& get_volume_idxs() const { return m_list; }
     const GLVolume* get_volume(unsigned int volume_idx) const;
     GLVolume*      get_volume(unsigned int volume_idx);
-    const GLVolume* get_first_volume() const { return get_volume(*m_list.begin()); }
+    const GLVolume* get_volume_by_object_volumn_id(unsigned int volume_id) const;
+    const GLVolume* get_first_volume() const;
     const ObjectIdxsToInstanceIdxsMap& get_content() const { return m_cache.content; }
 
     unsigned int volumes_count() const { return (unsigned int)m_list.size(); }
@@ -496,11 +500,12 @@ private:
     void render_selected_volumes() const;
     void render_synchronized_volumes() const;
     void render_bounding_box(const BoundingBoxf3& box, float* color) const;
-    void render_sidebar_position_hints(const std::string& sidebar_field) const;
-    void render_sidebar_rotation_hints(const std::string& sidebar_field) const;
+    void render_sidebar_position_hints(const std::string& sidebar_field, GLShaderProgram& shader, const Transform3d& model_matrix) const;
+    void render_sidebar_rotation_hints(const std::string& sidebar_field, GLShaderProgram& shader, const Transform3d& model_matrix) const;
     //BBS: GUI refactor: add uniform_scale from gizmo
-    void render_sidebar_scale_hints(const std::string& sidebar_field, bool gizmo_uniform_scale) const;
-    void render_sidebar_layers_hints(const std::string& sidebar_field) const;
+    void render_sidebar_scale_hints(const std::string& sidebar_field, bool gizmo_uniform_scale, GLShaderProgram& shader, const Transform3d& model_matrix) const;
+    void render_sidebar_layers_hints(GLShaderProgram& shader, const std::string& sidebar_field) const;
+    void init_bounding_box_model() const;
 
 public:
     enum class SyncRotationType {

@@ -13,6 +13,7 @@
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/chrono.hpp>
 #include <boost/beast/core/detail/base64.hpp>
+#include <boost/algorithm/string.hpp>
 
 #include <wx/sizer.h>
 #include <wx/toolbar.h>
@@ -55,7 +56,7 @@ WebViewPanel::WebViewPanel(wxWindow *parent)
     wxString UrlLeft  = wxString::Format("file://%s/web/homepage3/left.html", from_u8(resources_dir()));
     wxString UrlRight = wxString::Format("file://%s/web/homepage3/home.html", from_u8(resources_dir()));
 
-    wxString strlang = wxGetApp().current_language_code_safe();
+    wxString strlang = GetStudioLanguage();
     if (strlang != "")
     {
         UrlLeft = wxString::Format("file://%s/web/homepage3/left.html?lang=%s", from_u8(resources_dir()), strlang);
@@ -333,7 +334,7 @@ void WebViewPanel::ResetWholePage()
 wxString WebViewPanel::MakeDisconnectUrl(std::string MenuName)
 {
     wxString UrlDisconnect = wxString::Format("file://%s/web/homepage3/disconnect.html?menu=%s", from_u8(resources_dir()), MenuName);
-    wxString strlang       = wxGetApp().current_language_code_safe();
+    wxString strlang       = GetStudioLanguage();
     if (strlang != "") { UrlDisconnect = wxString::Format("file://%s/web/homepage3/disconnect.html?menu=%s&lang=%s", from_u8(resources_dir()), MenuName, strlang); }
 
     return UrlDisconnect;
@@ -823,7 +824,7 @@ void WebViewPanel::OpenOneMakerlab(std::string url)
     NetworkAgent *agent    = GUI::wxGetApp().getAgent();
     if (!agent) return;
 
-    //if (!agent->is_user_login()) { 
+    //if (!agent->is_user_login()) {
     //    wxGetApp().CallAfter([this] { wxGetApp().handle_web_request("{\"sequence_id\":1,\"command\":\"homepage_login_or_register\"}"); });
     //}
 
@@ -847,8 +848,8 @@ bool WebViewPanel::SaveBase64ToLocal(std::string Base64Buf, std::string FileName
 {
     int   nSize  = wxBase64DecodedSize(Base64Buf.length());
     char *DstBuf = new char[nSize + 1];
-    if (!DstBuf) 
-    { 
+    if (!DstBuf)
+    {
         BOOST_LOG_TRIVIAL(trace) << __FUNCTION__ << ": New Failed. Memory Not Enough";
         return false;
     }
@@ -928,14 +929,14 @@ void WebViewPanel::SaveMakerlabStl(int SequenceID, std::string Base64Buf, std::s
 
     std::string strJS = JFile.dump(-1, ' ', false, json::error_handler_t::ignore);
 
-    wxGetApp().CallAfter([this, strJS] { 
+    wxGetApp().CallAfter([this, strJS] {
         if (!m_browserML) return;
 
         WebView::RunScript(m_browserML, strJS);
     });
 }
 
-void WebViewPanel::UpdateMakerlabStatus(  ) 
+void WebViewPanel::UpdateMakerlabStatus(  )
 {
     if (m_browserML == nullptr) return;
 
@@ -953,10 +954,10 @@ void WebViewPanel::UpdateMakerlabStatus(  )
     if (wxGetApp().is_user_login())
     {
         NetworkAgent *agent = GUI::wxGetApp().getAgent();
-        if (agent == nullptr) { 
+        if (agent == nullptr) {
             wxString UrlDisconnect = MakeDisconnectUrl("makerlab");
-            m_browserML->LoadURL(UrlDisconnect);            
-            return; 
+            m_browserML->LoadURL(UrlDisconnect);
+            return;
         }
 
         std::string newticket;
@@ -970,7 +971,7 @@ void WebViewPanel::UpdateMakerlabStatus(  )
         else {
             wxString UrlDisconnect = MakeDisconnectUrl("makerlab");
             m_browserML->LoadURL(UrlDisconnect);
-        }    
+        }
     }
     else
     {
@@ -996,22 +997,19 @@ unsigned char FromHex(unsigned char x)
     return y;
 }
 
-std::string UrlEncode(const std::string &str)
+std::string UrlEncode( const std::string &input )
 {
-    std::string strTemp = "";
-    size_t      length  = str.length();
-    for (size_t i = 0; i < length; i++) {
-        if (isalnum((unsigned char) str[i]) || (str[i] == '-') || (str[i] == '_') || (str[i] == '.') || (str[i] == '~'))
-            strTemp += str[i];
-        else if (str[i] == ' ')
-            strTemp += "+";
-        else {
-            strTemp += '%';
-            strTemp += ToHex((unsigned char) str[i] >> 4);
-            strTemp += ToHex((unsigned char) str[i] % 16);
+    std::ostringstream escaped;
+    escaped.fill('0');
+    escaped << std::hex;
+    for (char c : input) {
+        if (std::isalnum(c) || c == '-' || c == '.' || c == '_' || c == '~') {
+            escaped << c;
+        } else {
+            escaped << '%' << std::setw(2) << static_cast<int>(static_cast<unsigned char>(c));
         }
     }
-    return strTemp;
+    return escaped.str();
 }
 
 std::string UrlDecode(const std::string &str)
@@ -1089,8 +1087,7 @@ void WebViewPanel::SetMakerworldPageLoginStatus(bool login ,wxString ticket)
             //std::cout << "Not Find agreeBackUrl" << std::endl;
             auto host = wxGetApp().get_model_http_url(wxGetApp().app_config->get_country_code());
 
-            wxString language_code = wxGetApp().current_language_code().BeforeFirst('_');
-            language_code          = language_code.ToStdString();
+            wxString language_code = wxString::FromUTF8(GetStudioLanguage()).BeforeFirst('_');
 
             mw_currenturl = (boost::format("%1%%2%/studio/webview?from=bambustudio") % host % language_code.mb_str()).str();
         }
@@ -1121,18 +1118,7 @@ void WebViewPanel::get_4u_staffpick(int seed, int limit, std::function<void(std:
         int ret = agent->get_mw_user_4ulist(seed,limit,callback);
 }
 
-int WebViewPanel::get_model_mall_detail_url(std::string *url, std::string id)
-{
-    // https://makerhub-qa.bambu-lab.com/en/models/2077
-    std::string h = wxGetApp().get_model_http_url(wxGetApp().app_config->get_country_code());
-    auto l = wxGetApp().current_language_code_safe();
-    if (auto n = l.find('_'); n != std::string::npos)
-        l = l.substr(0, n);
-    *url = (boost::format("%1%%2%/models/%3%") % h % l % id).str();
-    return 0;
-}
-
-void WebViewPanel::ShowUserPrintTask(bool bShow)
+void WebViewPanel::ShowUserPrintTask(bool bShow, bool bForce)
 {
     std::string phShow = wxGetApp().app_config->get("app", "show_print_history");
     if (bShow && phShow == "false") bShow = false;
@@ -1146,14 +1132,18 @@ void WebViewPanel::ShowUserPrintTask(bool bShow)
             auto      now       = std::chrono::system_clock::now();
             long long TmpMs     = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
             long long nInterval = TmpMs - PrintTaskMs;
-            if (nInterval < 2000) return;
+            if (!bForce && nInterval < 1000 * 60 * 10) return;
             PrintTaskMs = TmpMs;
 
             BBL::TaskQueryParams task_query_params;
             task_query_params.limit  = 5;
             task_query_params.offset = 0;
             int result               = agent->get_user_tasks(task_query_params, &m_TaskInfo);
+
+#if !BBL_RELEASE_TO_PUBLIC
             BOOST_LOG_TRIVIAL(trace) << "task_manager: get_task_list task_info=" << m_TaskInfo;
+#endif
+
             if (result == 0) {
                 try {
                     json j = json::parse(m_TaskInfo);
@@ -1161,6 +1151,7 @@ void WebViewPanel::ShowUserPrintTask(bool bShow)
 
                     auto body2 = from_u8(m_TaskInfo);
                     body2.insert(1, "\"command\": \"printhistory_task_show\", ");
+                    WebView::RunScript(m_browserLeft, wxString::Format("window.postMessage(%s)", body2));
                     RunScript(wxString::Format("window.postMessage(%s)", body2));
 
                     SetLeftMenuShow("printhistory", 1);
@@ -1184,8 +1175,7 @@ void WebViewPanel::ShowUserPrintTask(bool bShow)
         //refresh url
         auto host = wxGetApp().get_model_http_url(wxGetApp().app_config->get_country_code());
 
-        wxString language_code = wxGetApp().current_language_code().BeforeFirst('_');
-        language_code          = language_code.ToStdString();
+        wxString language_code = wxString::FromUTF8(GetStudioLanguage()).BeforeFirst('_');
 
         wxString mw_OffUrl = (boost::format("%1%%2%/studio/print-history?from=bambustudio") % host % language_code.mb_str()).str();
         wxString Finalurl  = wxString::Format("%sapi/sign-out?to=%s", host, UrlEncode("about:blank"));
@@ -1214,7 +1204,7 @@ void WebViewPanel::update_mode()
     */
 void WebViewPanel::OnNavigationRequest(wxWebViewEvent& evt)
 {
-    BOOST_LOG_TRIVIAL(trace) << __FUNCTION__ << ": " << evt.GetTarget().ToUTF8().data();
+    //BOOST_LOG_TRIVIAL(trace) << __FUNCTION__ << ": " << evt.GetURL().ToUTF8().data();
     const wxString &url = evt.GetURL();
     if (url.StartsWith("File://") || url.StartsWith("file://")) {
         if (!url.Contains("/web/homepage3/")) {
@@ -1291,8 +1281,8 @@ void WebViewPanel::OnNavigationComplete(wxWebViewEvent& evt)
         }
     }
 
-    if (m_browser != nullptr && evt.GetId() == m_browser->GetId()) 
-    { 
+    if (m_browser != nullptr && evt.GetId() == m_browser->GetId())
+    {
         SwitchWebContent("home");
         SendDesignStaffpick(true);
         SendMakerlabList();
@@ -1300,7 +1290,7 @@ void WebViewPanel::OnNavigationComplete(wxWebViewEvent& evt)
 
     //m_browser->Show();
     Layout();
-    BOOST_LOG_TRIVIAL(trace) << __FUNCTION__ << ": " << evt.GetTarget().ToUTF8().data();
+    //BOOST_LOG_TRIVIAL(trace) << __FUNCTION__ << ": " << evt.GetURL().ToUTF8().data();
     if (wxGetApp().get_mode() == comDevelop)
         wxLogMessage("%s", "Navigation complete; url='" + evt.GetURL() + "'");
     UpdateState();
@@ -1337,7 +1327,7 @@ void WebViewPanel::OnTitleChanged(wxWebViewEvent &evt)
     */
 void WebViewPanel::OnNewWindow(wxWebViewEvent& evt)
 {
-    BOOST_LOG_TRIVIAL(trace) << __FUNCTION__ << ": " << evt.GetURL().ToUTF8().data();
+    //BOOST_LOG_TRIVIAL(trace) << __FUNCTION__ << ": " << evt.GetURL().ToUTF8().data();
     wxString flag = " (other)";
 
     if (evt.GetNavigationAction() == wxWEBVIEW_NAV_ACTION_USER)
@@ -1599,7 +1589,7 @@ void WebViewPanel::OnSelectAll(wxCommandEvent& WXUNUSED(evt))
     */
 void WebViewPanel::OnError(wxWebViewEvent& evt)
 {
-    BOOST_LOG_TRIVIAL(info) << "HomePage OnError, Url = " << evt.GetURL() << " , Message: "<<evt.GetString();
+    //BOOST_LOG_TRIVIAL(info) << "HomePage OnError, Url = " << evt.GetURL() << " , Message: "<<evt.GetString();
 
 #define WX_ERROR_CASE(type) \
     case type: \
@@ -1688,8 +1678,7 @@ void WebViewPanel::OpenMakerworldSearchPage(std::string KeyWord)
 
     auto host = wxGetApp().get_model_http_url(wxGetApp().app_config->get_country_code());
 
-    wxString language_code = wxGetApp().current_language_code().BeforeFirst('_');
-    language_code          = language_code.ToStdString();
+    wxString language_code = wxString::FromUTF8(GetStudioLanguage()).BeforeFirst('_');
 
     m_online_LastUrl = (boost::format("%1%%2%/studio/webview/search?keyword=%3%&from=bambustudio") % host % language_code.mb_str() % UrlEncode(KeyWord)).str();
 
@@ -1700,8 +1689,7 @@ void WebViewPanel::SetMakerworldModelID(std::string ModelID)
 {
     auto host = wxGetApp().get_model_http_url(wxGetApp().app_config->get_country_code());
 
-    wxString language_code = wxGetApp().current_language_code().BeforeFirst('_');
-    language_code          = language_code.ToStdString();
+    wxString language_code = wxString::FromUTF8(GetStudioLanguage()).BeforeFirst('_');
 
     if (ModelID != "")
         m_online_LastUrl = (boost::format("%1%%2%/studio/webview?modelid=%3%&from=bambustudio") % host % language_code.mb_str() % ModelID).str();
@@ -1713,8 +1701,7 @@ void WebViewPanel::SetPrintHistoryTaskID(int TaskID)
 {
     auto host = wxGetApp().get_model_http_url(wxGetApp().app_config->get_country_code());
 
-    wxString language_code = wxGetApp().current_language_code().BeforeFirst('_');
-    language_code          = language_code.ToStdString();
+    wxString language_code = wxString::FromUTF8(GetStudioLanguage()).BeforeFirst('_');
 
     if (TaskID != 0)
         m_print_history_LastUrl = (boost::format("%1%%2%/studio/print-history/%3%?from=bambustudio") % host % language_code.mb_str() % TaskID).str();
@@ -1728,16 +1715,16 @@ void WebViewPanel::SwitchWebContent(std::string modelname, int refresh)
 
     CheckMenuNewTag();
 
-    wxString strlang = wxGetApp().current_language_code_safe();
+    wxString strlang = GetStudioLanguage();
 
-    if (modelname.compare("makersupply") == 0) 
+    if (modelname.compare("makersupply") == 0)
     {
         std::string strRegion = wxGetApp().app_config->get_country_code();
         wxString    MakerSupplyUrl;
         if (strRegion == "CN")
-            MakerSupplyUrl = "https://bambulab.tmall.com/category-1761686934.htm?from=bambustudio";
+            MakerSupplyUrl = "https://bambulab.tmall.com/category-1761686934.htm?from=bambustudio&from=mw_homepage_ms";
         else
-            MakerSupplyUrl = "https://store.bambulab.com/collections/makers-supply?from=bambustudio";
+            MakerSupplyUrl = "https://store.bambulab.com/collections/makers-supply?from=bambustudio&from=mw_homepage_ms";
 
         wxLaunchDefaultBrowser(MakerSupplyUrl);
     }
@@ -1750,7 +1737,7 @@ void WebViewPanel::SwitchWebContent(std::string modelname, int refresh)
             UpdateMakerlabStatus();
         }
         else {
-            if (m_MakerLab_LastUrl != "") m_browserML->LoadURL(m_MakerLab_LastUrl);        
+            if (m_MakerLab_LastUrl != "") m_browserML->LoadURL(m_MakerLab_LastUrl);
         }
 
         m_MakerLabFirst = true;
@@ -1946,6 +1933,15 @@ void WebViewPanel::SetWebviewShow(wxString name, bool show)
         else
             TmpWeb->Hide();
     }
+}
+
+std::string WebViewPanel::GetStudioLanguage()
+{
+    std::string strLanguage = wxGetApp().app_config->get("language");
+    boost::trim(strLanguage);
+    if (strLanguage.empty()) strLanguage = "en";
+
+    return strLanguage;
 }
 
 SourceViewDialog::SourceViewDialog(wxWindow* parent, wxString source) :

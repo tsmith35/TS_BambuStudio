@@ -37,7 +37,9 @@ TabCtrl::TabCtrl(wxWindow *      parent,
     SetBorderColor(0xcecece);
     sizer = new wxBoxSizer(wxHORIZONTAL);
     sizer->AddSpacer(10);
-    SetSizer(sizer);
+    auto hsizer = new wxBoxSizer(wxVERTICAL);
+    hsizer->Add(sizer, 0, wxEXPAND | wxBOTTOM, border_width * 4);
+    SetSizer(hsizer);
     Bind(wxEVT_COMMAND_BUTTON_CLICKED, &TabCtrl::buttonClicked, this);
     //wxString reason;
     //IsTransparentBackgroundSupported(&reason);
@@ -108,7 +110,7 @@ int TabCtrl::AppendItem(const wxString &item,
     btns.push_back(btn);
     if (btns.size() > 1)
         sizer->GetItem(sizer->GetItemCount() - 1)->SetMinSize({0, 0});
-    sizer->Add(btn, 0, wxALIGN_CENTER_VERTICAL | wxALL, TAB_BUTTON_SPACE);
+    sizer->Add(btn, 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, TAB_BUTTON_SPACE);
     sizer->AddStretchSpacer(1);
     relayout();
     return btns.size() - 1;
@@ -175,6 +177,12 @@ void TabCtrl::AssignImageList(wxImageList* imageList)
     images = imageList;
 }
 
+void TabCtrl::SetItemPaddingSize(unsigned int item, const wxSize &size)
+{
+    if (item >= btns.size()) return;
+    btns[item]->SetPaddingSize(size);
+}
+
 void TabCtrl::SetItemTextColour(unsigned int item, const StateColor &col)
 {
     if (item >= btns.size()) return;
@@ -224,7 +232,6 @@ void TabCtrl::relayout()
     if (item < btns.size())
         offset += btns[item]->GetMinSize().x + TAB_BUTTON_SPACE * 2;
     int  width = GetSize().x;
-    auto sizer = GetSizer();
     for (int i = 0; i < btns.size(); ++i) {
         auto size = btns[i]->GetMinSize().x + TAB_BUTTON_SPACE * 2;
         if (i < sel && offset > width) {
@@ -251,7 +258,7 @@ void TabCtrl::relayout()
     // Keep spacing 2 ~ 10 TAB_BUTTON_SPACE
     int b = GetSize().x - offset - 10 - (item + 1 - first) * TAB_BUTTON_SPACE * 8;
     sizer->GetItem(item * 2 + 2)->SetMinSize({b > 0 ? b : 0, 0});
-    sizer->Layout();
+    Layout();
 }
 
 void TabCtrl::buttonClicked(wxCommandEvent &event)
@@ -304,7 +311,7 @@ void TabCtrl::doRender(wxDC& dc)
 #else
     dc.SetPen(wxPen(border_color.colorForStates(states), border_width));
     dc.DrawLine(0, size.y - BS2, size.x, size.y - BS2);
-    wxColor c(0x42AE00);
+    wxColour c("#00AE42");
     dc.SetPen(wxPen(c, 1));
     dc.SetBrush(c);
     dc.DrawRoundedRectangle(x1 - radius, size.y - BS2 - border_width * 3, x2 + radius * 2 - x1, border_width * 3, radius);

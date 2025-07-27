@@ -4,6 +4,7 @@
 #include "MultiMaterialSegmentation.hpp"
 #include "Print.hpp"
 #include "ClipperUtils.hpp"
+#include "Interlocking/InterlockingGenerator.hpp"
 //BBS
 #include "ShortestPath.hpp"
 
@@ -967,6 +968,112 @@ static inline void apply_mm_segmentation(PrintObject &print_object, ThrowOnCance
         });
 }
 
+template<typename ThrowOnCancel> void apply_fuzzy_skin_segmentation(PrintObject &print_object, ThrowOnCancel throw_on_cancel)
+{
+    // Returns fuzzy skin segmentation based on painting in the fuzzy skin painting gizmo.
+    std::vector<std::vector<ExPolygons>> segmentation = fuzzy_skin_segmentation_by_painting(print_object, throw_on_cancel);
+    assert(segmentation.size() == print_object.layer_count());
+
+    struct ByRegion
+    {
+        ExPolygons expolygons;
+        bool       needs_merge{false};
+    };
+
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, segmentation.size(), std::max(segmentation.size() / 128, size_t(1))),
+        [&print_object, &segmentation, throw_on_cancel](const tbb::blocked_range<size_t> &range) {
+        const auto &layer_ranges   = print_object.shared_regions()->layer_ranges;
+        auto        it_layer_range = layer_range_first(layer_ranges, print_object.get_layer(int(range.begin()))->slice_z);
+
+        for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++layer_idx) {
+            throw_on_cancel();
+
+            Layer &layer                                             = *print_object.get_layer(int(layer_idx));
+            it_layer_range                                           = layer_range_next(layer_ranges, it_layer_range, layer.slice_z);
+            const PrintObjectRegions::LayerRangeRegions &layer_range = *it_layer_range;
+
+            //assert(segmentation[layer_idx].size() == 1);
+            const ExPolygons &fuzzy_skin_segmentation      = segmentation[layer_idx][1];
+            const BoundingBox fuzzy_skin_segmentation_bbox = get_extents(fuzzy_skin_segmentation);
+            if (fuzzy_skin_segmentation.empty())
+                continue;
+
+            // Split LayerRegions by painted fuzzy skin regions.
+            // layer_range.fuzzy_skin_painted_regions are sorted by parent PrintObject region ID.
+            std::vector<ByRegion> by_region(layer.region_count());
+            auto                  it_fuzzy_skin_region_begin = layer_range.fuzzy_skin_painted_regions.cbegin();
+            for (int parent_layer_region_idx = 0; parent_layer_region_idx < layer.region_count(); ++parent_layer_region_idx) {
+                if (it_fuzzy_skin_region_begin == layer_range.fuzzy_skin_painted_regions.cend()) continue;
+
+                const LayerRegion &parent_layer_region = *layer.get_region(parent_layer_region_idx);
+                const PrintRegion &parent_print_region = parent_layer_region.region();
+                assert(parent_print_region.print_object_region_id() == parent_layer_region_idx);
+                if (parent_layer_region.slices.empty())
+                    continue;
+
+                // Find the first FuzzySkinPaintedRegion, which overrides the parent PrintRegion.
+                auto it_fuzzy_skin_region = std::find_if(it_fuzzy_skin_region_begin, layer_range.fuzzy_skin_painted_regions.cend(),
+                                                         [&layer_range, &parent_print_region](const auto &fuzzy_skin_region) {
+                                                             return fuzzy_skin_region.parent_print_object_region_id(layer_range) == parent_print_region.print_object_region_id();
+                                                         });
+
+                if (it_fuzzy_skin_region == layer_range.fuzzy_skin_painted_regions.cend()) continue; // This LayerRegion isn't overrides by any FuzzySkinPaintedRegion.
+
+                assert(it_fuzzy_skin_region->parent_print_object_region(layer_range) == &parent_print_region);
+
+                // Update the beginning FuzzySkinPaintedRegion iterator for the next iteration.
+                it_fuzzy_skin_region_begin = std::next(it_fuzzy_skin_region);
+
+                const BoundingBox parent_layer_region_bbox        = get_extents(parent_layer_region.slices.surfaces);
+                Polygons          layer_region_remaining_polygons = to_polygons(parent_layer_region.slices.surfaces);
+                // Don't trim by self, it is not reliable.
+                if (parent_layer_region_bbox.overlap(fuzzy_skin_segmentation_bbox) && it_fuzzy_skin_region->region != &parent_print_region) {
+                    // Steal from this region.
+                    const int  target_region_id = it_fuzzy_skin_region->region->print_object_region_id();
+                    ExPolygons stolen           = intersection_ex(parent_layer_region.slices.surfaces, fuzzy_skin_segmentation);
+                    if (!stolen.empty()) {
+                        ByRegion &dst = by_region[target_region_id];
+                        if (dst.expolygons.empty()) {
+                            dst.expolygons = std::move(stolen);
+                        } else {
+                            append(dst.expolygons, std::move(stolen));
+                            dst.needs_merge = true;
+                        }
+                    }
+
+                    // Trim slices of this LayerRegion by the fuzzy skin region.
+                    layer_region_remaining_polygons = diff(layer_region_remaining_polygons, fuzzy_skin_segmentation);
+
+                    // Filter out unprintable polygons. Detailed explanation is inside apply_mm_segmentation.
+                    if (!layer_region_remaining_polygons.empty()) {
+                        layer_region_remaining_polygons = opening(union_ex(layer_region_remaining_polygons), scaled<float>(5. * EPSILON), scaled<float>(5. * EPSILON));
+                    }
+                }
+
+                if (!layer_region_remaining_polygons.empty()) {
+                    ByRegion &dst = by_region[parent_print_region.print_object_region_id()];
+                    if (dst.expolygons.empty()) {
+                        dst.expolygons = union_ex(layer_region_remaining_polygons);
+                    } else {
+                        append(dst.expolygons, union_ex(layer_region_remaining_polygons));
+                        dst.needs_merge = true;
+                    }
+                }
+            }
+
+            // Re-create Surfaces of LayerRegions.
+            for (int region_id = 0; region_id < layer.region_count(); ++region_id) {
+                ByRegion &src = by_region[region_id];
+                if (src.needs_merge) {
+                    // Multiple regions were merged into one.
+                    src.expolygons = closing_ex(src.expolygons, scaled<float>(10. * EPSILON));
+                }
+
+                layer.get_region(region_id)->slices.set(std::move(src.expolygons), stInternal);
+            }
+        }
+    }); // end of parallel_for
+}
 
 // 1) Decides Z positions of the layers,
 // 2) Initializes layers and their regions
@@ -1016,21 +1123,6 @@ void PrintObject::slice_volumes()
         PrintObject::clip_multipart_objects,
         throw_on_cancel_callback);
 
-    // SuperSlicer: filament shrink
-    for (const std::unique_ptr<PrintRegion> &pr : m_shared_regions->all_regions) {
-        if (pr.get()) {
-            std::vector<ExPolygons> &region_polys = region_slices[pr->print_object_region_id()];
-            const size_t             extruder_id  = pr->extruder(FlowRole::frPerimeter) - 1;
-            double                   scale        = print->config().filament_shrink.values[extruder_id] * 0.01;
-            if (scale != 1) {
-                scale = 1 / scale;
-                for (ExPolygons &polys : region_polys)
-                    for (ExPolygon &poly : polys) poly.scale(scale);
-            }
-        }
-    }
-
-
     for (size_t region_id = 0; region_id < region_slices.size(); ++ region_id) {
         std::vector<ExPolygons> &by_layer = region_slices[region_id];
         for (size_t layer_id = 0; layer_id < by_layer.size(); ++ layer_id)
@@ -1069,6 +1161,41 @@ void PrintObject::slice_volumes()
         apply_mm_segmentation(*this, [print]() { print->throw_if_canceled(); });
     }
 
+     // Is any ModelVolume fuzzy skin painted?
+    if (this->model_object()->is_fuzzy_skin_painted()) {
+        // If XY Size compensation is also enabled, notify the user that XY Size compensation
+        // would not be used because the object has custom fuzzy skin painted.
+        if (m_config.xy_hole_compensation.value != 0.f || m_config.xy_contour_compensation.value != 0.f) {
+            this->active_step_add_warning(
+                PrintStateBase::WarningLevel::CRITICAL,
+                _u8L("An object has enabled XY Size compensation which will not be used because it is also fuzzy skin painted.\nXY Size "
+                     "compensation cannot be combined with fuzzy skin painting.") +
+                    "\n" + (_u8L("Object name")) + ": " + this->model_object()->name);
+        }
+
+        BOOST_LOG_TRIVIAL(debug) << "Slicing volumes - Fuzzy skin segmentation";
+        apply_fuzzy_skin_segmentation(*this, [print]() { print->throw_if_canceled(); });
+    }
+
+    InterlockingGenerator::generate_interlocking_structure(this);
+    m_print->throw_if_canceled();
+
+    // SuperSlicer: filament shrink
+    for (Layer *layer : m_layers) {
+        for (size_t i = 0; i < layer->region_count(); ++i) {
+            LayerRegion *region = layer->get_region(i);
+            ExPolygons ex_polys = to_expolygons(region->slices.surfaces);
+            int       filament_id = region->region().extruder(FlowRole::frPerimeter) - 1;
+            double       scale       = print->config().filament_shrink.values[filament_id] * 0.01;
+            if (scale != 1) {
+                scale = 1 / scale;
+                for (ExPolygon &poly : ex_polys)
+                    poly.scale(scale);
+            }
+
+            region->slices.set(std::move(ex_polys), stInternal);
+        }
+    }
 
     BOOST_LOG_TRIVIAL(debug) << "Slicing volumes - make_slices in parallel - begin";
     {
@@ -1184,6 +1311,8 @@ void PrintObject::slice_volumes()
                         }
 	                }
 	                // Merge all regions' slices to get islands, chain them by a shortest path.
+                    if (this->config().enable_circle_compensation)
+                        layer->apply_auto_circle_compensation();
 	                layer->make_slices();
 	            }
 	        });

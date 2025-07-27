@@ -47,6 +47,20 @@ private:
 
     // emboss need to draw rotation gizmo in local coordinate systems
     bool m_force_local_coordinate{false};
+
+    struct GrabberConnection
+    {
+        GLModel model;
+    };
+    mutable GrabberConnection m_grabber_connection;
+    mutable GLModel m_circle;
+    mutable GLModel m_scale;
+    mutable GLModel m_snap_radii;
+    mutable GLModel m_reference_radius;
+    mutable GLModel m_angle_arc;
+
+    mutable float m_old_angle{ 0.0f };
+    Transform3d m_base_model_matrix{ Transform3d::Identity() };
 public:
     GLGizmoRotate(GLCanvas3D& parent, Axis axis);
     GLGizmoRotate(const GLGizmoRotate& other);
@@ -60,6 +74,10 @@ public:
     void set_center(const Vec3d &point) { m_custom_center = point; }
     void set_force_local_coordinate(bool use) { m_force_local_coordinate = use; }
     void init_data_from_selection(const Selection &selection);
+    void set_custom_tran(const Transform3d &tran);
+    BoundingBoxf3 get_bounding_box() const override;
+
+    std::string get_icon_filename(bool b_dark_mode) const override;
 
 protected:
     bool on_init() override;
@@ -70,17 +88,21 @@ protected:
     void on_render_for_picking() override;
 
 private:
-    void render_circle() const;
-    void render_scale() const;
-    void render_snap_radii() const;
-    void render_reference_radius() const;
-    void render_angle() const;
+    void render_circle(const ColorRGBA& color) const;
+    void render_scale(const ColorRGBA& color) const;
+    void render_snap_radii(const ColorRGBA& color) const;
+    void render_reference_radius(const ColorRGBA& color) const;
+    void render_angle(const ColorRGBA& color) const;
+    void render_grabber_connection(const ColorRGBA& color);
     void render_grabber(const BoundingBoxf3& box) const;
     void render_grabber_extension(const BoundingBoxf3& box, bool picking) const;
-
-    void transform_to_local(const Selection& selection) const;
+    Transform3d calculate_circle_model_matrix() const;
+    Transform3d transform_to_local(const Selection& selection) const;
     // returns the intersection of the mouse ray with the plane perpendicular to the gizmo axis, in local coordinate
     Vec3d mouse_position_in_local_plane(const Linef3& mouse_ray, const Selection& selection) const;
+
+private:
+    std::optional<Transform3d> m_custom_tran;
 };
 
 class GLGizmoRotate3D : public GLGizmoBase
@@ -95,7 +117,7 @@ protected:
 public:
     //BBS: add obj manipulation logic
     //GLGizmoRotate3D(GLCanvas3D& parent, const std::string& icon_filename, unsigned int sprite_id);
-    GLGizmoRotate3D(GLCanvas3D& parent, const std::string& icon_filename, unsigned int sprite_id, GizmoObjectManipulation* obj_manipulation);
+    GLGizmoRotate3D(GLCanvas3D& parent, unsigned int sprite_id, GizmoObjectManipulation* obj_manipulation);
 
     Vec3d get_rotation() const { return Vec3d(m_gizmos[X].get_angle(), m_gizmos[Y].get_angle(), m_gizmos[Z].get_angle()); }
     void set_rotation(const Vec3d& rotation) { m_gizmos[X].set_angle(rotation(0)); m_gizmos[Y].set_angle(rotation(1)); m_gizmos[Z].set_angle(rotation(2)); }
@@ -116,6 +138,10 @@ public:
         m_gizmos[Y].set_center(point);
         m_gizmos[Z].set_center(point);
     }
+
+    BoundingBoxf3 get_bounding_box() const override;
+
+    std::string get_icon_filename(bool b_dark_mode) const override;
 
 protected:
     bool on_init() override;

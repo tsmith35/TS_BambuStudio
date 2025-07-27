@@ -19,10 +19,10 @@ namespace Slic3r::GUI {
 enum class SLAGizmoEventType : unsigned char;
 class ClippingPlane;
 struct Camera;
-class GLGizmoMmuSegmentation;
 
 enum class PainterGizmoType {
     FDM_SUPPORTS,
+    FUZZY_SKIN,
     SEAM,
     MMU_SEGMENTATION
 };
@@ -71,11 +71,11 @@ public:
 
     // Render current selection. Transformation matrices are supposed
     // to be already set.
-    virtual void render(ImGuiWrapper *imgui);
-    void         render() { this->render(nullptr); }
+    virtual void render(ImGuiWrapper *imgui, const Transform3d &matrix, bool render_paint_contour_at_same_time = true);
+    void         render_paint_contour(const Transform3d &matrix, bool clear_depth = false);
     void         set_wireframe_needed(bool need_wireframe) { m_need_wireframe = need_wireframe; }
     bool         get_wireframe_needed() { return m_need_wireframe; }
-
+    bool         get_paint_contour_has_data() { return m_paint_contour.is_initialized(); }
     // BBS
     void request_update_render_data(bool paint_changed = false)
     {
@@ -94,6 +94,9 @@ public:
 #endif
 
 protected:
+    void update_paint_contour();
+
+protected:
     bool m_update_render_data = false;
     // BBS
     bool m_paint_changed = true;
@@ -103,13 +106,13 @@ protected:
 private:
     void update_render_data();
 
-    GLIndexedVertexArray                m_iva_enforcers;
-    GLIndexedVertexArray                m_iva_blockers;
-    std::array<GLIndexedVertexArray, 3> m_iva_seed_fills;
-    std::array<GLIndexedVertexArray, 3> m_varrays;
+    GLModel                m_iva_enforcers;
+    GLModel                m_iva_blockers;
+    std::array<GLModel, 3> m_iva_seed_fills;
+    std::array<GLModel, 3> m_varrays;
 
 protected:
-    GLPaintContour                      m_paint_contour;
+    GLModel                             m_paint_contour;
     bool                                m_need_wireframe {false};
 };
 
@@ -128,13 +131,12 @@ struct TrianglePatch {
 
 class TriangleSelectorPatch : public TriangleSelectorGUI {
 public:
-    explicit TriangleSelectorPatch(const TriangleMesh& mesh, const std::vector<std::array<float, 4>> ebt_colors, float edge_limit = 0.6f)
-        : TriangleSelectorGUI(mesh, edge_limit), m_ebt_colors(ebt_colors) {}
+    explicit TriangleSelectorPatch(const TriangleMesh &mesh, const std::vector<std::array<float, 4>> ebt_colors, float edge_limit = 0.6f);
     virtual ~TriangleSelectorPatch() = default;
 
     // Render current selection. Transformation matrices are supposed
     // to be already set.
-    void render(ImGuiWrapper* imgui) override;
+    void render(ImGuiWrapper *imgui, const Transform3d &matrix, bool render_paint_contour_at_same_time) override;
     // TriangleSelector.m_triangles => m_gizmo_scene.triangle_patches
     void update_triangles_per_type();
     // m_gizmo_scene.triangle_patches => TriangleSelector.m_triangles
@@ -142,6 +144,7 @@ public:
     void update_triangles_per_patch();
 
     void set_ebt_colors(const std::vector<std::array<float, 4>> ebt_colors) { m_ebt_colors = ebt_colors; }
+    const std::vector<std::array<float, 4>> &get_ebt_colors() const { return m_ebt_colors; }
     void set_filter_state(bool is_filter_state);
 
     constexpr static float GapAreaMin = 0.f;
@@ -150,6 +153,7 @@ public:
 
     // BBS: fix me
     static float gap_area;
+    static bool exist_gap_area;
 
 protected:
     // Release the geometry data, release OpenGL VBOs.
@@ -198,11 +202,10 @@ protected:
     std::vector<std::array<float, 4>> m_ebt_colors;
 
     bool                        m_filter_state = false;
-    bool                        m_cached_wireframe_mode = false;
 
 private:
     void update_render_data();
-    void render(int buffer_idx, int position_id = -1, bool show_wireframe=false);
+    void render(int buffer_idx);
 };
 
 
@@ -217,10 +220,9 @@ private:
     void on_render() override {}
     void on_render_for_picking() override {}
 public:
-    GLGizmoPainterBase(GLCanvas3D& parent, const std::string& icon_filename, unsigned int sprite_id);
+    GLGizmoPainterBase(GLCanvas3D& parent, unsigned int sprite_id);
     ~GLGizmoPainterBase() override = default;
-    virtual void set_painter_gizmo_data(const Selection& selection);
-    virtual bool gizmo_event(SLAGizmoEventType action, const Vec2d& mouse_position, bool shift_down, bool alt_down, bool control_down);
+    bool gizmo_event(SLAGizmoEventType action, const Vec2d& mouse_position, bool shift_down, bool alt_down, bool control_down) override;
 
     // Following function renders the triangles and cursor. Having this separated
     // from usual on_render method allows to render them before transparent
@@ -239,7 +241,9 @@ public:
     void update_front_view_radian();
 
 protected:
+    virtual void set_painter_gizmo_data(const Selection &selection);
     virtual void render_triangles(const Selection& selection) const;
+    void         init_selected_glvolume(GLVolume &v, const TriangleMesh &mesh, const Geometry::Transformation &world_transformation) const;
     void render_cursor() const;
     void render_cursor_circle() const;
     void render_cursor_sphere(const Transform3d& trafo) const;
@@ -298,8 +302,15 @@ protected:
 
     bool     m_triangle_splitting_enabled = true;
     ToolType m_tool_type                  = ToolType::BRUSH;
-    float    m_smart_fill_angle           = 30.f;
-
+    wchar_t       m_current_tool          = 0;
+    mutable int m_last_hit_state             = -1;
+    mutable int   m_last_hit_state_faces     = -1;
+    mutable Vec3d m_last_hit_its_center      = Vec3d::Zero();
+    const float DEFAULT_FILL_ANGLE           = 30.f;
+    float       m_smart_fill_angle           = DEFAULT_FILL_ANGLE;
+    float       m_last_edge_detection_smart_fill_angle = DEFAULT_FILL_ANGLE;
+    enum class BucketFillType { SameColor, EdgeDetect };
+    BucketFillType m_bucket_fill_mode           = BucketFillType::SameColor;
     bool     m_paint_on_overhangs_only          = false;
     float    m_highlight_by_angle_threshold_deg = 0.f;
 
@@ -333,6 +344,18 @@ protected:
     TriangleSelector::ClippingPlane get_clipping_plane_in_volume_coordinates(const Transform3d &trafo) const;
 
     void change_camera_view_angle(float front_view_radian);
+    // Following cache holds result of a raycast query. The queries are asked
+    // during rendering the sphere cursor and painting, this saves repeated
+    // raycasts when the mouse position is the same as before.
+    struct RaycastResult
+    {
+        Vec2d  mouse_position;
+        int    mesh_id;
+        Vec3f  hit;
+        size_t facet;
+    };
+    mutable GLGizmoPainterBase::RaycastResult m_rr;
+    mutable bool          m_lock_x_for_height_bottom{false};
  private:
     std::vector<std::vector<ProjectedMousePosition>> get_projected_mouse_positions(const Vec2d &mouse_position, double resolution, const std::vector<Transform3d> &trafo_matrices) const;
 
@@ -352,16 +375,7 @@ protected:
     Button m_button_down = Button::None;
     EState m_old_state = Off; // to be able to see that the gizmo has just been closed (see on_set_state)
 
-    // Following cache holds result of a raycast query. The queries are asked
-    // during rendering the sphere cursor and painting, this saves repeated
-    // raycasts when the mouse position is the same as before.
-    struct RaycastResult {
-        Vec2d mouse_position;
-        int mesh_id;
-        Vec3f hit;
-        size_t facet;
-    };
-    mutable RaycastResult m_rr;
+
 
     // BBS
     struct CutContours
@@ -374,6 +388,7 @@ protected:
         ObjectID object_id;
         int instance_idx{ -1 };
     };
+    mutable GLModel m_circle;
     mutable std::vector<CutContours> m_cut_contours;
     mutable int                      m_volumes_index = 0;
     mutable float       m_cursor_z{0};
@@ -381,7 +396,6 @@ protected:
     mutable bool        m_is_set_height_start_z_by_imgui{false};
     mutable Vec2i       m_height_start_pos{0, 0};
     mutable float       m_x_for_height_input{-1};
-    mutable bool        m_lock_x_for_height_bottom{false};
     mutable Vec2f       m_height_range_input_all_size;
     mutable bool        m_is_cursor_in_imgui{false};
     BoundingBoxf3 bounding_box() const;
@@ -399,13 +413,12 @@ protected:
     bool on_is_activable() const override;
     bool on_is_selectable() const override;
     void on_load(cereal::BinaryInputArchive& ar) override;
-    void on_save(cereal::BinaryOutputArchive& ar) const override {}
+    void on_save(cereal::BinaryOutputArchive &ar) const override;
     CommonGizmosDataID on_get_requirements() const override;
     bool wants_enter_leave_snapshots() const override { return true; }
 
     virtual wxString handle_snapshot_action_name(bool shift_down, Button button_down) const = 0;
     bool             is_mouse_hit_in_imgui()const;
-    friend class ::Slic3r::GUI::GLGizmoMmuSegmentation;
     mutable Vec2i m_imgui_start_pos{0, 0};
     mutable Vec2i m_imgui_end_pos{0, 0};
 };

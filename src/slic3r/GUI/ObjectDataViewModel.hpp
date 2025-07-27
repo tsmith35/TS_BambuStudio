@@ -44,6 +44,7 @@ enum ColumnNumber
     colFilament        ,    // extruder selection
     // BBS
     colSupportPaint    ,
+    colFuzzySkin       ,
     colColorPaint      ,
     colSinking         ,
     colEditing         ,    // item editing
@@ -68,6 +69,7 @@ enum class InfoItemType
     Undef,
     CustomSupports,
     //CustomSeam,
+    FuzzySkin,
     MmuSegmentation,
     //Sinking
     CutConnectors,
@@ -97,6 +99,7 @@ class ObjectDataViewModelNode
     wxBitmap				        m_action_icon;
     // BBS
     wxBitmap                        m_support_icon;
+    wxBitmap                        m_fuzzyskin_icon;
     wxBitmap                        m_color_icon;
     wxBitmap                        m_sinking_icon;
     PrintIndicator                  m_printable {piUndef};
@@ -115,6 +118,7 @@ class ObjectDataViewModelNode
     bool                            m_action_enable = false; // can undo all settings
     // BBS
     bool                            m_support_enable = false;
+    bool                            m_fuzzyskin_enable = false;
     bool                            m_color_enable = false;
     bool                            m_sink_enable = false;
 
@@ -260,6 +264,7 @@ public:
     // BBS
     bool            HasColorPainting() const        { return m_color_enable; }
     bool            HasSupportPainting() const { return m_support_enable; }
+    bool            HasFuzzySkinPainting() const { return m_fuzzyskin_enable; }
     bool            HasSinking() const { return m_sink_enable; }
     bool            IsActionEnabled() const         { return m_action_enable; }
     void            UpdateExtruderAndColorIcon(wxString extruder = "");
@@ -301,9 +306,10 @@ public:
     void        set_variable_height_icon(VaryHeightIndicator vari_height);
     void        set_action_icon(bool enable);
     // BBS
-    void        set_color_icon(bool enable);
-    void        set_support_icon(bool enable);
-    void        set_sinking_icon(bool enable);
+    void        set_color_icon(bool enable, bool force = false);
+    void        set_support_icon(bool enable,bool force = false);
+    void        set_fuzzyskin_icon(bool enable, bool force = false);
+    void        set_sinking_icon(bool enable, bool force = false);
 
     // Set warning icon for node
     void        set_warning_icon(const std::string& warning_icon);
@@ -354,26 +360,30 @@ class ObjectDataViewModel :public wxDataViewModel
     wxDataViewCtrl*                             m_ctrl { nullptr };
     std::vector<std::tuple<ObjectDataViewModelNode*, wxString, wxString>> assembly_name_list;
     std::vector<std::tuple<ObjectDataViewModelNode*, wxString, wxString>> search_found_list;
-    std::map<int, int>                          m_ui_and_3d_volume_map;
+    std::map<int,std::map<int, int>>                                      m_ui_and_3d_volume_maps;
 
 public:
     ObjectDataViewModel();
     ~ObjectDataViewModel();
 
     void Init();
-    std::map<int, int> &get_ui_and_3d_volume_map() { return m_ui_and_3d_volume_map; }
-    int                 get_real_volume_index_in_3d(int ui_value)
+    std::map<int, std::map<int, int>> &get_ui_and_3d_volume_map() { return m_ui_and_3d_volume_maps; }
+    int   get_real_volume_index_in_3d(int ui_object_value, int ui_volume_value)
     {
-        if (m_ui_and_3d_volume_map.find(ui_value) != m_ui_and_3d_volume_map.end()) {
-            return m_ui_and_3d_volume_map[ui_value];
+        if (m_ui_and_3d_volume_maps.find(ui_object_value) != m_ui_and_3d_volume_maps.end()) {
+            auto cur_map = m_ui_and_3d_volume_maps[ui_object_value];
+            if (cur_map.find(ui_volume_value) != cur_map.end()) { return cur_map[ui_volume_value]; }
         }
-        return ui_value;
+        return ui_volume_value;
     }
-    int get_real_volume_index_in_ui(int _3d_value)
+    int get_real_volume_index_in_ui(int ui_object_value, int _3d_value)
     {
-        for (auto item: m_ui_and_3d_volume_map) {
-            if (item.second == _3d_value) {
-                return item.first;
+        if (m_ui_and_3d_volume_maps.find(ui_object_value) != m_ui_and_3d_volume_maps.end()) {
+            auto cur_map = m_ui_and_3d_volume_maps[ui_object_value];
+            for (auto item : cur_map) {
+                if (item.second == _3d_value) {
+                    return item.first;
+                }
             }
         }
         return _3d_value;
@@ -504,10 +514,12 @@ public:
     // BBS
     bool    IsColorPainted(wxDataViewItem& item) const;
     bool    IsSupportPainted(wxDataViewItem &item) const;
+    bool    IsFuzzySkinPainted(wxDataViewItem &item) const;
     bool    IsSinked(wxDataViewItem &item) const;
-    void    SetColorPaintState(const bool painted, wxDataViewItem obj_item);
-    void    SetSupportPaintState(const bool painted, wxDataViewItem obj_item);
-    void    SetSinkState(const bool painted, wxDataViewItem obj_item);
+    void    SetColorPaintState(const bool painted, wxDataViewItem obj_item,bool force = false);
+    void    SetSupportPaintState(const bool painted, wxDataViewItem obj_item,bool force = false);
+    void    SetFuzzySkinPaintState(const bool painted, wxDataViewItem obj_item, bool force = false);
+    void    SetSinkState(const bool painted, wxDataViewItem obj_item,bool force = false);
 
     void    SetAssociatedControl(wxDataViewCtrl* ctrl) { m_ctrl = ctrl; }
     // Rescale bitmaps for existing Items

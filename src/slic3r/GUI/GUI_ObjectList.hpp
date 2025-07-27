@@ -222,6 +222,7 @@ public:
     void                create_objects_ctrl();
     // BBS
     void                update_objects_list_filament_column(size_t filaments_count);
+    void                update_objects_list_filament_column_when_delete_filament(size_t filament_id, size_t filaments_count, int replace_filament_id = -1);
     void                update_filament_colors();
     // show/hide "Extruder" column for Objects List
     void                set_filament_column_hidden(const bool hide) const;
@@ -230,6 +231,7 @@ public:
     // BBS
     void                set_color_paint_hidden(const bool hide) const;
     void                set_support_paint_hidden(const bool hide) const;
+    void                set_fuzzy_skin_paint_hidden(const bool hide) const;
     void                set_sinking_hidden(const bool hide) const;
 
     // update extruder in current config
@@ -238,6 +240,7 @@ public:
     void                update_name_in_model(const wxDataViewItem& item) const;
     void                update_name_in_list(int obj_idx, int vol_idx) const;
     void                update_filament_values_for_items(const size_t filaments_count);
+    void                update_filament_values_for_items_when_delete_filament(const size_t filament_id, const int replace_id = -1);
 
     //BBS: update plate
     void                update_plate_values_for_items();
@@ -286,6 +289,7 @@ public:
     //void                load_part(ModelObject& model_object, std::vector<ModelVolume*>& added_volumes, ModelVolumeType type, bool from_galery = false);
     void                load_modifier(const wxArrayString& input_files, ModelObject& model_object, std::vector<ModelVolume*>& added_volumes, ModelVolumeType type, bool from_galery = false);
     void                load_generic_subobject(const std::string& type_name, const ModelVolumeType type);
+    void                add_new_model_object_from_old_object();
     void                load_shape_object(const std::string &type_name);
     void                load_mesh_object(const TriangleMesh &mesh, const wxString &name, bool center = true);
     // BBS
@@ -419,7 +423,7 @@ public:
     void update_and_show_object_settings_item();
     void update_settings_item_and_selection(wxDataViewItem item, wxDataViewItemArray& selections);
     void update_object_list_by_printer_technology();
-    void update_info_items(size_t obj_idx, wxDataViewItemArray* selections = nullptr, bool added_object = false);
+    void update_info_items(size_t obj_idx, wxDataViewItemArray *selections = nullptr, bool added_object = false, bool color_mode_changed = false);
     void update_variable_layer_obj_num(ObjectDataViewModelNode* obj_node, size_t layer_data_count);
 
     void instances_to_separated_object(const int obj_idx, const std::set<int>& inst_idx);
@@ -434,6 +438,7 @@ public:
     void paste_layers_into_list();
     void copy_settings_to_clipboard();
     void paste_settings_into_list();
+    bool can_paste_settings_into_list();
     bool clipboard_is_empty() const { return m_clipboard.empty(); }
     void paste_volumes_into_list(int obj_idx, const ModelVolumePtrs& volumes);
     void paste_objects_into_list(const std::vector<size_t>& object_idxs);
@@ -451,8 +456,6 @@ public:
     void set_extruder_for_selected_items(const int extruder);
     wxDataViewItemArray reorder_volumes_and_get_selection(int obj_idx, std::function<bool(const ModelVolume*)> add_to_selection = nullptr);
     void apply_volumes_order();
-    bool has_paint_on_segmentation();
-
     // BBS
     void on_plate_added(PartPlate* part_plate);
     void on_plate_deleted(int plate_index);

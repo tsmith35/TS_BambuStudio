@@ -46,23 +46,37 @@ void MeshClipper::set_limiting_plane(const ClippingPlane& plane)
     }
 }
 
-void MeshClipper::set_mesh(const TriangleMesh& mesh)
+void MeshClipper::set_mesh(const indexed_triangle_set &mesh)
 {
-    if (m_mesh != &mesh) {
+    if (m_mesh.get() != &mesh) {
         m_mesh = &mesh;
-        reset();
+        m_result.reset();
     }
 }
 
-void MeshClipper::set_negative_mesh(const TriangleMesh& mesh)
+void MeshClipper::set_mesh(AnyPtr<const indexed_triangle_set> &&ptr)
 {
-    if (m_negative_mesh != &mesh) {
-        m_negative_mesh = &mesh;
-        reset();
+    if (m_mesh.get() != ptr.get()) {
+        m_mesh = std::move(ptr);
+        m_result.reset();
     }
 }
 
+void MeshClipper::set_negative_mesh(const indexed_triangle_set &mesh)
+{
+    if (m_negative_mesh.get() != &mesh) {
+        m_negative_mesh = &mesh;
+        m_result.reset();
+    }
+}
 
+void MeshClipper::set_negative_mesh(AnyPtr<const indexed_triangle_set> &&ptr)
+{
+    if (m_negative_mesh.get() != ptr.get()) {
+        m_negative_mesh = std::move(ptr);
+        m_result.reset();
+    }
+}
 
 void MeshClipper::set_transformation(const Geometry::Transformation& trafo)
 {
@@ -75,12 +89,14 @@ void MeshClipper::set_transformation(const Geometry::Transformation& trafo)
 void MeshClipper::render_cut(const ColorRGBA &color, const std::vector<size_t> *ignore_idxs)
 {
     if (!m_result) recalculate_triangles();
-    GLShaderProgram *curr_shader = wxGetApp().get_current_shader();
-    if (curr_shader != nullptr) curr_shader->stop_using();
+    const auto& curr_shader = wxGetApp().get_current_shader();
+    if (curr_shader != nullptr) {
+        wxGetApp().unbind_shader();
+    }
 
-    GLShaderProgram *shader = wxGetApp().get_shader("flat");
+    const auto& shader = wxGetApp().get_shader("flat");
     if (shader != nullptr) {
-        shader->start_using();
+        wxGetApp().bind_shader(shader);
         const Camera &camera = wxGetApp().plater()->get_camera();
         shader->set_uniform("view_model_matrix", camera.get_view_matrix());
         shader->set_uniform("projection_matrix", camera.get_projection_matrix());
@@ -89,24 +105,28 @@ void MeshClipper::render_cut(const ColorRGBA &color, const std::vector<size_t> *
             auto isl = m_result->cut_islands[i];
             ColorRGBA  gray{0.5f, 0.5f, 0.5f, 1.f};
             isl->model.set_color(-1, isl->disabled ? gray.get_data() : color.get_data());
-            isl->model.render();
+            isl->model.render_geometry();
         }
-        shader->stop_using();
+        wxGetApp().unbind_shader();
     }
 
-    if (curr_shader != nullptr) curr_shader->start_using();
+    if (curr_shader != nullptr) {
+        wxGetApp().bind_shader(curr_shader);
+    }
 }
 
 void MeshClipper::render_contour(const ColorRGBA &color, const std::vector<size_t> *ignore_idxs)
 {
     if (!m_result) recalculate_triangles();
 
-    GLShaderProgram *curr_shader = wxGetApp().get_current_shader();
-    if (curr_shader != nullptr) curr_shader->stop_using();
+    const auto curr_shader = wxGetApp().get_current_shader();
+    if (curr_shader != nullptr) {
+        wxGetApp().unbind_shader();
+    }
 
-    GLShaderProgram *shader = wxGetApp().get_shader("flat");
+    const auto& shader = wxGetApp().get_shader("flat");
     if (shader != nullptr) {
-        shader->start_using();
+        wxGetApp().bind_shader(shader);
         const Camera &camera = wxGetApp().plater()->get_camera();
         shader->set_uniform("view_model_matrix", camera.get_view_matrix());
         shader->set_uniform("projection_matrix", camera.get_projection_matrix());
@@ -115,13 +135,14 @@ void MeshClipper::render_contour(const ColorRGBA &color, const std::vector<size_
             auto isl = m_result->cut_islands[i];
             ColorRGBA  red{1.0f, 0.f, 0.f, 1.f};
             isl->model_expanded.set_color(-1, isl->disabled ? red.get_data() : color.get_data());
-            isl->model_expanded.render();
+            isl->model_expanded.render_geometry();
         }
-        shader->stop_using();
+        wxGetApp().unbind_shader();
     }
 
-    if (curr_shader != nullptr)
-        curr_shader->start_using();
+    if (curr_shader != nullptr) {
+        wxGetApp().unbind_shader();
+    }
 }
 
 int MeshClipper::is_projection_inside_cut(const Vec3d &point_in) const
@@ -201,10 +222,10 @@ void MeshClipper::recalculate_triangles()
 
     // if (m_csgmesh.empty()) {
     if (m_mesh) {
-        expolys = union_ex(slice_mesh(m_mesh->its, height_mesh, slicing_params));
+        expolys = union_ex(slice_mesh(*m_mesh, height_mesh, slicing_params));
     }
     if (m_negative_mesh && !m_negative_mesh->empty()) {
-        const ExPolygons neg_expolys = union_ex(slice_mesh(m_negative_mesh->its, height_mesh, slicing_params));
+        const ExPolygons neg_expolys = union_ex(slice_mesh(*m_negative_mesh, height_mesh, slicing_params));
         expolys                      = diff_ex(expolys, neg_expolys);
     }
 

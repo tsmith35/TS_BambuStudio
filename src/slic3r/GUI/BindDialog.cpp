@@ -480,7 +480,7 @@ PingCodeBindDialog::~PingCodeBindDialog() {
      m_link_Terms_title->SetFont(Label::Head_13);
      m_link_Terms_title->SetMaxSize(wxSize(FromDIP(450), -1));
      m_link_Terms_title->Wrap(FromDIP(450));
-     m_link_Terms_title->SetForegroundColour(wxColour(0x00AE42));
+     m_link_Terms_title->SetForegroundColour(wxColour("#00AE42"));
      m_link_Terms_title->Bind(wxEVT_LEFT_DOWN, [this](auto& e) {
          wxString txt = _L("Thank you for purchasing a Bambu Lab device.Before using your Bambu Lab device, please read the termsand conditions.By clicking to agree to use your Bambu Lab device, you agree to abide by the Privacy Policy and Terms of Use(collectively, the \"Terms\"). If you do not comply with or agree to the Bambu Lab Privacy Policy, please do not use Bambu Lab equipment and services.");
          ConfirmBeforeSendDialog confirm_dlg(this, wxID_ANY, _L("Terms and Conditions"), ConfirmBeforeSendDialog::ButtonStyle::ONLY_CONFIRM);
@@ -499,7 +499,7 @@ PingCodeBindDialog::~PingCodeBindDialog() {
      m_link_privacy_title->SetFont(Label::Head_13);
      m_link_privacy_title->SetMaxSize(wxSize(FromDIP(450), -1));
      m_link_privacy_title->Wrap(FromDIP(450));
-     m_link_privacy_title->SetForegroundColour(wxColour(0x00AE42));
+     m_link_privacy_title->SetForegroundColour(wxColour("#00AE42"));
      m_link_privacy_title->Bind(wxEVT_LEFT_DOWN, [this](auto& e) {
          std::string url;
          std::string country_code = Slic3r::GUI::wxGetApp().app_config->get_country_code();
@@ -539,7 +539,7 @@ PingCodeBindDialog::~PingCodeBindDialog() {
      m_link_notice_title->SetFont(Label::Head_13);
      m_link_notice_title->SetMaxSize(wxSize(FromDIP(450), -1));
      m_link_notice_title->Wrap(FromDIP(450));
-     m_link_notice_title->SetForegroundColour(wxColour(0x00AE42));
+     m_link_notice_title->SetForegroundColour(wxColour("#0x00AE42"));
      m_link_notice_title->Bind(wxEVT_ENTER_WINDOW, [this](auto& e) {SetCursor(wxCURSOR_HAND); });
      m_link_notice_title->Bind(wxEVT_LEAVE_WINDOW, [this](auto& e) {SetCursor(wxCURSOR_ARROW); });
      m_link_notice_title->Bind(wxEVT_LEFT_DOWN, [this](auto& e) {
@@ -756,7 +756,7 @@ PingCodeBindDialog::~PingCodeBindDialog() {
          json j = json::parse(str.utf8_string());
          if (j.contains("err_code")) {
              int error_code = j["err_code"].get<int>();
-             wxGetApp().get_hms_query()->query_print_error_msg(error_code, extra);
+             extra = wxGetApp().get_hms_query()->query_print_error_msg(m_machine_info, error_code);
          }
      }
      catch (...) {
@@ -913,7 +913,7 @@ void BindMachineDialog::on_show(wxShowEvent &event)
     if (event.IsShown()) {
         auto img = m_machine_info->get_printer_thumbnail_img_str();
         if (wxGetApp().dark_mode()) { img += "_dark"; }
-        auto bitmap = create_scaled_bitmap(img, this, FromDIP(100));
+        auto bitmap = create_scaled_bitmap(img, this, FromDIP(80));
         m_printer_img->SetBitmap(bitmap);
         m_printer_img->Refresh();
         m_printer_img->Show();
@@ -1133,7 +1133,7 @@ void UnBindMachineDialog::on_show(wxShowEvent &event)
     if (event.IsShown()) {
         auto img = m_machine_info->get_printer_thumbnail_img_str();
         if (wxGetApp().dark_mode()) { img += "_dark"; }
-        auto bitmap = create_scaled_bitmap(img, this, FromDIP(100));
+        auto bitmap = create_scaled_bitmap(img, this, FromDIP(80));
         m_printer_img->SetBitmap(bitmap);
         m_printer_img->Refresh();
         m_printer_img->Show();

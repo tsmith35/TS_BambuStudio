@@ -145,7 +145,7 @@ void LayerNumberTextInput::update_label()
 
 void LayerNumberTextInput::set_layer_number(int layer_number)
 {
-    m_layer_number = layer_number; 
+    m_layer_number = layer_number;
     if (layer_number == MAX_LAYER_VALUE)
         m_value_type = ValueType::End;
     else
@@ -300,8 +300,8 @@ void OtherLayersSeqPanel::append_layer(const LayerSeqInfo* layer_info)
     auto drag_canvas = new DragCanvas(m_layer_input_panel, extruder_colours, order);
 
     if (layer_info) {
-        begin_layer_input->set_layer_number(layer_info->begin_layer_number);
-        end_layer_input->set_layer_number(layer_info->end_layer_number);
+        begin_layer_input->set_layer_number(std::max(MIN_LAYER_VALUE, layer_info->begin_layer_number));
+        end_layer_input->set_layer_number(std::min(MAX_LAYER_VALUE, layer_info->end_layer_number));
         drag_canvas->set_shape_list(extruder_colours, layer_info->print_sequence);
     }
 
@@ -381,8 +381,25 @@ PlateSettingsDialog::PlateSettingsDialog(wxWindow* parent, const wxString& title
 
     // Plate type
     m_bed_type_choice = new ComboBox( this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(240),-1), 0, NULL, wxCB_READONLY );
-    for (BedType i = btDefault; i < btCount; i = BedType(int(i) + 1)) {
-        m_bed_type_choice->Append(to_bed_type_name(i));
+    auto pm           = wxGetApp().plater()->get_curr_printer_model();
+    if (pm) {
+        m_cur_combox_bed_types.clear();
+        m_bed_type_choice->AppendString(_L("Same as Global Plate Type"));
+        const ConfigOptionDef *bed_type_def = print_config_def.get("curr_bed_type");
+        int                    index        = 0;
+        for (auto item : bed_type_def->enum_labels) {
+            index++;
+            bool find = std::find(pm->not_support_bed_types.begin(), pm->not_support_bed_types.end(), item) != pm->not_support_bed_types.end();
+            if (!find) {
+                m_bed_type_choice->AppendString(_L(item));
+                m_cur_combox_bed_types.emplace_back(BedType(index));
+            }
+        }
+
+    } else {
+        for (BedType i = btDefault; i < btCount; i = BedType(int(i) + 1)) {
+            m_bed_type_choice->Append(to_bed_type_name(i));
+        }
     }
     wxStaticText* m_bed_type_txt = new wxStaticText(this, wxID_ANY, _L("Bed type"));
     m_bed_type_txt->SetFont(Label::Body_14);
@@ -440,7 +457,7 @@ PlateSettingsDialog::PlateSettingsDialog(wxWindow* parent, const wxString& title
     m_drag_canvas->Hide();
     top_sizer->Add(0, 0, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_LEFT, 0);
     top_sizer->Add(m_drag_canvas, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_RIGHT | wxBOTTOM, FromDIP(10));
-    
+
     m_sizer_main->Add(top_sizer, 0, wxEXPAND | wxTOP | wxLEFT | wxRIGHT, FromDIP(30));
 
     // Other layer filament sequence
@@ -527,7 +544,13 @@ PlateSettingsDialog::~PlateSettingsDialog()
 void PlateSettingsDialog::sync_bed_type(BedType type)
 {
     if (m_bed_type_choice != nullptr) {
-        m_bed_type_choice->SetSelection(int(type));
+        for (int i = 0; i < m_cur_combox_bed_types.size(); i++) {
+            if (m_cur_combox_bed_types[i] == type) {
+                m_bed_type_choice->SetSelection(i + 1);//+1 because same as global
+                return;
+            }
+        }
+        m_bed_type_choice->SetSelection(0);
     }
 }
 
@@ -613,6 +636,17 @@ void PlateSettingsDialog::on_dpi_changed(const wxRect& suggested_rect)
     m_button_ok->Rescale();
     m_button_cancel->Rescale();
 }
+
+BedType PlateSettingsDialog::get_bed_type_choice()
+{
+    if (m_bed_type_choice != nullptr) {
+        int choice = m_bed_type_choice->GetSelection();
+        if (choice > 0) {
+            return m_cur_combox_bed_types[choice - 1];//-1 because same as globlal
+        }
+    }
+    return BedType::btDefault;
+};
 
 std::vector<int> PlateSettingsDialog::get_first_layer_print_seq()
 {

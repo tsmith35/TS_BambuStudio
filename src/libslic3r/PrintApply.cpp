@@ -1,3 +1,4 @@
+#include "ClipperUtils.hpp"
 #include "Model.hpp"
 #include "Print.hpp"
 
@@ -74,6 +75,8 @@ static inline void model_volume_list_copy_configs(ModelObject &model_object_dst,
 		mv_dst.config.assign_config(mv_src.config);
         assert(mv_dst.supported_facets.id() == mv_src.supported_facets.id());
         mv_dst.supported_facets.assign(mv_src.supported_facets);
+        assert(mv_dst.fuzzy_skin_facets.id() == mv_src.fuzzy_skin_facets.id());
+        mv_dst.fuzzy_skin_facets.assign(mv_src.fuzzy_skin_facets);
         assert(mv_dst.seam_facets.id() == mv_src.seam_facets.id());
         mv_dst.seam_facets.assign(mv_src.seam_facets);
         assert(mv_dst.mmu_segmentation_facets.id() == mv_src.mmu_segmentation_facets.id());
@@ -217,7 +220,8 @@ static t_config_option_keys print_config_diffs(
     const PrintConfig        &current_config,
     const DynamicPrintConfig &new_full_config,
     DynamicPrintConfig       &filament_overrides,
-    int plate_index)
+    int                      plate_index,
+    std::vector<int>&        filament_maps)
 {
     const std::vector<std::string> &extruder_retract_keys = print_config_def.extruder_retract_keys();
     const std::string               filament_prefix       = "filament_";
@@ -231,26 +235,9 @@ static t_config_option_keys print_config_diffs(
             //FIXME This may happen when executing some test cases.
             continue;
         const ConfigOption *opt_new_filament = std::binary_search(extruder_retract_keys.begin(), extruder_retract_keys.end(), opt_key) ? new_full_config.option(filament_prefix + opt_key) : nullptr;
-        if (opt_new_filament != nullptr && ! opt_new_filament->is_nil()) {
-            // An extruder retract override is available at some of the filament presets.
-            bool overriden = opt_new->overriden_by(opt_new_filament);
-            if (overriden || *opt_old != *opt_new) {
-                auto opt_copy = opt_new->clone();
-                if (!((opt_key == "long_retractions_when_cut" || opt_key == "retraction_distances_when_cut")
-                    && new_full_config.option<ConfigOptionInt>("enable_long_retraction_when_cut")->value != LongRectrationLevel::EnableFilament)) // ugly code, remove it later if firmware supports
-                    opt_copy->apply_override(opt_new_filament);
-                bool changed = *opt_old != *opt_copy;
-                if (changed)
-                    print_diff.emplace_back(opt_key);
-                if (changed || overriden) {
-                    if ((opt_key == "long_retractions_when_cut" || opt_key == "retraction_distances_when_cut")
-                        && new_full_config.option<ConfigOptionInt>("enable_long_retraction_when_cut")->value != LongRectrationLevel::EnableFilament)
-                        continue;
-                    // filament_overrides will be applied to the placeholder parser, which layers these parameters over full_print_config.
-                    filament_overrides.set_key_value(opt_key, opt_copy);
-                } else
-                    delete opt_copy;
-            }
+
+        if (opt_new_filament != nullptr) {
+            compute_filament_override_value(opt_key, opt_old, opt_new, opt_new_filament, new_full_config, print_diff, filament_overrides, filament_maps);
         } else if (*opt_new != *opt_old) {
             //BBS: add plate_index logic for wipe_tower_x/wipe_tower_y
             if (!opt_key.compare("wipe_tower_x") || !opt_key.compare("wipe_tower_y")) {
@@ -302,6 +289,51 @@ static t_config_option_keys full_print_config_diffs(const DynamicPrintConfig &cu
         }
     }
     return full_config_diff;
+}
+
+static bool is_printable_filament_changed(const DynamicPrintConfig& new_full_config, const Polygon& old_poly, const Polygon& new_poly)
+{
+    if (old_poly != new_poly) {
+        auto map_mode_opt = new_full_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode");
+        if (map_mode_opt && map_mode_opt->value == FilamentMapMode::fmmManual)
+            return false;
+
+        Pointfs              printable_area = new_full_config.option<ConfigOptionPoints>("printable_area")->values;
+        std::vector<Pointfs> extruder_areas = new_full_config.option<ConfigOptionPointsGroups>("extruder_printable_area")->values;
+        Points               pts;
+        for (auto pt : printable_area) { pts.emplace_back(Point(scale_(pt.x()), scale_(pt.y()))); }
+        Polygon printable_poly(pts);
+
+        std::vector<Polygon> extruder_polys;
+        for (auto extruder_area : extruder_areas) {
+            pts.clear();
+            for (auto pt : extruder_area) { pts.emplace_back(Point(scale_(pt.x()), scale_(pt.y()))); }
+            extruder_polys.emplace_back(Polygon(pts));
+        }
+
+        std::vector<Polygon> split_polys;
+        for (const Polygon poly : extruder_polys) {
+            Polygons res = diff(printable_poly, poly);
+            if (!res.empty()) { split_polys.emplace_back(res[0]); }
+        }
+
+        Polygons all_extruder_polys = intersection({printable_poly}, extruder_polys);
+        if (!all_extruder_polys.empty()) split_polys.emplace_back(all_extruder_polys[0]);
+
+        auto find_intersections = [](const Polygon &poly, const std::vector<Polygon> &contours) -> std::set<int> {
+            std::set<int> result;
+            for (size_t i = 0; i < contours.size(); ++i) {
+                if (!intersection(poly, contours[i]).empty()) { result.insert(static_cast<int>(i)); }
+            }
+            return result;
+        };
+
+        std::set<int> old_poly_ids = find_intersections(old_poly, split_polys);
+        std::set<int> new_poly_ids = find_intersections(new_poly, split_polys);
+
+        return old_poly_ids != new_poly_ids;
+    }
+    return false;
 }
 
 // Repository for solving partial overlaps of ModelObject::layer_config_ranges.
@@ -689,7 +721,7 @@ PrintObjectRegions::BoundingBox find_modifier_volume_extents(const PrintObjectRe
     return out;
 }
 
-PrintRegionConfig region_config_from_model_volume(const PrintRegionConfig &default_or_parent_region_config, const DynamicPrintConfig *layer_range_config, const ModelVolume &volume, size_t num_extruders);
+PrintRegionConfig region_config_from_model_volume(const PrintRegionConfig &default_or_parent_region_config, const DynamicPrintConfig *layer_range_config, const ModelVolume &volume, size_t num_extruders, std::vector<int>& variant_index);
 
 void print_region_ref_inc(PrintRegion &r) { ++ r.m_ref_cnt; }
 void print_region_ref_reset(PrintRegion &r) { r.m_ref_cnt = 0; }
@@ -704,7 +736,8 @@ bool verify_update_print_object_regions(
     size_t                              num_extruders,
     const std::vector<unsigned int>    &painting_extruders,
     PrintObjectRegions                 &print_object_regions,
-    const std::function<void(const PrintRegionConfig&, const PrintRegionConfig&, const t_config_option_keys&)> &callback_invalidate)
+    const std::function<void(const PrintRegionConfig&, const PrintRegionConfig&, const t_config_option_keys&)> &callback_invalidate,
+    std::vector<int>& variant_index)
 {
     // Sort by ModelVolume ID.
     model_volumes_sort_by_id(model_volumes);
@@ -749,7 +782,7 @@ bool verify_update_print_object_regions(
                             } else if (PrintObjectRegions::BoundingBox parent_bbox = find_modifier_volume_extents(layer_range, parent_region_id); parent_bbox.intersects(*bbox))
                                 // Such parent region does not exist. If it is needed, then we need to reslice.
                                 // Only create new region for a modifier, which actually modifies config of it's parent.
-                                if (PrintRegionConfig config = region_config_from_model_volume(parent_region.region->config(), nullptr, **it_model_volume, num_extruders);
+                                if (PrintRegionConfig config = region_config_from_model_volume(parent_region.region->config(), nullptr, **it_model_volume, num_extruders, variant_index);
                                     config != parent_region.region->config())
                                     // This modifier newly overrides a region, which it did not before. We need to reslice.
                                     return false;
@@ -757,8 +790,8 @@ bool verify_update_print_object_regions(
                     }
                 }
                 PrintRegionConfig cfg = region.parent == -1 ?
-                    region_config_from_model_volume(default_region_config, layer_range.config, **it_model_volume, num_extruders) :
-                    region_config_from_model_volume(layer_range.volume_regions[region.parent].region->config(), nullptr, **it_model_volume, num_extruders);
+                    region_config_from_model_volume(default_region_config, layer_range.config, **it_model_volume, num_extruders, variant_index) :
+                    region_config_from_model_volume(layer_range.volume_regions[region.parent].region->config(), nullptr, **it_model_volume, num_extruders, variant_index);
                 if (cfg != region.region->config()) {
                     // Region configuration changed.
                     if (print_region_ref_cnt(*region.region) == 0) {
@@ -799,6 +832,29 @@ bool verify_update_print_object_regions(
             }
             print_region_ref_inc(*region.region);
         }
+
+    // Verify and / or update PrintRegions produced by fuzzy skin painting.
+    for (const PrintObjectRegions::LayerRangeRegions &layer_range : print_object_regions.layer_ranges) {
+        for (const PrintObjectRegions::FuzzySkinPaintedRegion &region : layer_range.fuzzy_skin_painted_regions) {
+            const PrintRegion &parent_print_region = *region.parent_print_object_region(layer_range);
+            PrintRegionConfig  cfg                 = parent_print_region.config();
+            cfg.fuzzy_skin.value                   = FuzzySkinType::All;
+            if (cfg != region.region->config()) {
+                // Region configuration changed.
+                if (print_region_ref_cnt(*region.region) == 0) {
+                    // Region is referenced for the first time. Just change its parameters.
+                    // Stop the background process before assigning new configuration to the regions.
+                    t_config_option_keys diff = region.region->config().diff(cfg);
+                    callback_invalidate(region.region->config(), cfg, diff);
+                    region.region->config_apply_only(cfg, diff, false);
+                } else {
+                    // Region is referenced multiple times, thus the region is being split. We need to reslice.
+                    return false;
+                }
+            }
+            print_region_ref_inc(*region.region);
+        }
+    }
 
     // Lastly verify, whether some regions were not merged.
     {
@@ -903,7 +959,9 @@ static PrintObjectRegions* generate_print_object_regions(
     const Transform3d                           &trafo,
     size_t                                       num_extruders,
     const float                                  xy_contour_compensation,
-    const std::vector<unsigned int>             & painting_extruders)
+    const std::vector<unsigned int>             & painting_extruders,
+    std::vector<int>                            & variant_index,
+    const bool                                   has_painted_fuzzy_skin)
 {
     // Reuse the old object or generate a new one.
     auto out = print_object_regions_old ? std::unique_ptr<PrintObjectRegions>(print_object_regions_old) : std::make_unique<PrintObjectRegions>();
@@ -925,6 +983,7 @@ static PrintObjectRegions* generate_print_object_regions(
             r.config = range.config;
             r.volume_regions.clear();
             r.painted_regions.clear();
+            r.fuzzy_skin_painted_regions.clear();
         }
     } else {
         out->trafo_bboxes = trafo;
@@ -960,7 +1019,7 @@ static PrintObjectRegions* generate_print_object_regions(
                         // Add a model volume, assign an existing region or generate a new one.
                         layer_range.volume_regions.push_back({
                             &volume, -1,
-                            get_create_region(region_config_from_model_volume(default_region_config, layer_range.config, volume, num_extruders)),
+                            get_create_region(region_config_from_model_volume(default_region_config, layer_range.config, volume, num_extruders, variant_index)),
                             bbox
                         });
                     } else if (volume.is_negative_volume()) {
@@ -977,7 +1036,7 @@ static PrintObjectRegions* generate_print_object_regions(
                             if (parent_volume.is_model_part() || parent_volume.is_modifier())
                                 if (PrintObjectRegions::BoundingBox parent_bbox = find_modifier_volume_extents(layer_range, parent_region_id); parent_bbox.intersects(*bbox)) {
                                     // Only create new region for a modifier, which actually modifies config of it's parent.
-                                    if (PrintRegionConfig config = region_config_from_model_volume(parent_region.region->config(), nullptr, volume, num_extruders);
+                                    if (PrintRegionConfig config = region_config_from_model_volume(parent_region.region->config(), nullptr, volume, num_extruders, variant_index);
                                         config != parent_region.region->config()) {
                                         added = true;
                                         layer_range.volume_regions.push_back({ &volume, parent_region_id, get_create_region(std::move(config)), bbox });
@@ -1013,10 +1072,39 @@ static PrintObjectRegions* generate_print_object_regions(
             return lid < rid || (lid == rid && l.extruder_id < r.extruder_id); });
     }
 
+    if (has_painted_fuzzy_skin) {
+        using FuzzySkinParentType = PrintObjectRegions::FuzzySkinPaintedRegion::ParentType;
+
+        for (PrintObjectRegions::LayerRangeRegions &layer_range : layer_ranges_regions) {
+            // FuzzySkinPaintedRegion can override different parts of the Layer than PaintedRegions,
+            // so FuzzySkinPaintedRegion has to point to both VolumeRegion and PaintedRegion.
+            for (int parent_volume_region_id = 0; parent_volume_region_id < int(layer_range.volume_regions.size()); ++parent_volume_region_id) {
+                if (const PrintObjectRegions::VolumeRegion &parent_volume_region = layer_range.volume_regions[parent_volume_region_id]; parent_volume_region.model_volume->is_model_part() || parent_volume_region.model_volume->is_modifier()) {
+                    PrintRegionConfig cfg = parent_volume_region.region->config();
+                    cfg.fuzzy_skin.value  = FuzzySkinType::All;
+                    layer_range.fuzzy_skin_painted_regions.push_back({FuzzySkinParentType::VolumeRegion, parent_volume_region_id, get_create_region(std::move(cfg))});
+                }
+            }
+
+            for (int parent_painted_regions_id = 0; parent_painted_regions_id < int(layer_range.painted_regions.size()); ++parent_painted_regions_id) {
+                const PrintObjectRegions::PaintedRegion &parent_painted_region = layer_range.painted_regions[parent_painted_regions_id];
+
+                PrintRegionConfig cfg = parent_painted_region.region->config();
+                cfg.fuzzy_skin.value  = FuzzySkinType::All;
+                layer_range.fuzzy_skin_painted_regions.push_back({FuzzySkinParentType::PaintedRegion, parent_painted_regions_id, get_create_region(std::move(cfg))});
+            }
+
+            // Sort the regions by parent region::print_object_region_id() to help the slicing algorithm when applying fuzzy skin segmentation.
+            std::sort(layer_range.fuzzy_skin_painted_regions.begin(), layer_range.fuzzy_skin_painted_regions.end(), [&layer_range](auto &l, auto &r) {
+                return l.parent_print_object_region_id(layer_range) < r.parent_print_object_region_id(layer_range);
+            });
+        }
+    }
+
     return out.release();
 }
 
-Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_config)
+Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_config, bool extruder_applied)
 {
 #ifdef _DEBUG
     check_model_ids_validity(model);
@@ -1028,12 +1116,14 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
 	new_full_config.option("print_settings_id",            true);
 	new_full_config.option("filament_settings_id",         true);
 	new_full_config.option("printer_settings_id",          true);
+
     // BBS
-    int used_filaments = this->extruders(true).size();
+    std::vector <unsigned int> used_filaments = this->extruders(true);
+    std::unordered_set <unsigned int> used_filament_set(used_filaments.begin(), used_filaments.end());
 
     //new_full_config.normalize_fdm(used_filaments);
     new_full_config.normalize_fdm_1();
-    t_config_option_keys changed_keys = new_full_config.normalize_fdm_2(objects().size(), used_filaments);
+    t_config_option_keys changed_keys = new_full_config.normalize_fdm_2(objects().size(), used_filaments.size());
     if (changed_keys.size() > 0) {
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", got changed_keys, size=%1%")%changed_keys.size();
         for (int i = 0; i < changed_keys.size(); i++)
@@ -1048,6 +1138,7 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
         m_support_used = false;
 
     // check if filament ebnable scarf seam
+    bool has_scarf_joint_seam = false;
     {
         std::vector<int> scarf_seam_type = new_full_config.option<ConfigOptionEnumsGeneric>("filament_scarf_seam_type")->values;
         auto check_object_scarf_seam_type = [](const std::vector<int> scarf_seam_type, const ModelObject *mo) {
@@ -1093,7 +1184,7 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
         };
 
         // check custon_gcode
-        bool has_scarf_joint_seam = check_gcode_scarf_seam_type(scarf_seam_type, model) ||
+        has_scarf_joint_seam = check_gcode_scarf_seam_type(scarf_seam_type, model) ||
             std::any_of(model.objects.begin(), model.objects.end(), [scarf_seam_type, &check_object_scarf_seam_type](const ModelObject *obj) {
             return check_object_scarf_seam_type(scarf_seam_type, obj);
         });
@@ -1105,14 +1196,115 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
         }
     }
 
+    if (!has_scarf_joint_seam) { // check scarf seam setting
+        const auto &o = model.objects;
+
+        has_scarf_joint_seam = std::any_of(o.begin(), o.end(), [&new_full_config](ModelObject *obj) {
+            return obj->get_config_value<ConfigOptionBool>(new_full_config, "enable_circle_compensation")
+                ->value && obj->get_config_value<ConfigOptionBool>(new_full_config, "apply_scarf_seam_on_circles")
+                ->value;
+        });
+
+        if (has_scarf_joint_seam) {
+            new_full_config.set("has_scarf_joint_seam", true);
+        }
+
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ", has_scarf_joint_seam:" << has_scarf_joint_seam;
+    }
+
+    if (!has_scarf_joint_seam) { // check scarf seam setting
+        const auto &o = model.objects;
+        const auto  opt_has_scarf_joint_seam = [](const DynamicConfig &c) {
+            return c.has("override_filament_scarf_seam_setting") && c.opt_bool("override_filament_scarf_seam_setting") && c.has("seam_slope_type") &&
+                   c.opt_enum<SeamScarfType>("seam_slope_type") != SeamScarfType::None;
+        };
+
+        has_scarf_joint_seam = std::any_of(o.begin(), o.end(), [&new_full_config, &opt_has_scarf_joint_seam](ModelObject *obj) {
+            return obj->get_config_value<ConfigOptionEnum<SeamScarfType>>(new_full_config, "seam_slope_type")->value != SeamScarfType::None ||
+                   std::any_of(obj->volumes.begin(), obj->volumes.end(),
+                               [&opt_has_scarf_joint_seam](const ModelVolume *v) { return opt_has_scarf_joint_seam(v->config.get()); }) ||
+                   std::any_of(obj->layer_config_ranges.begin(), obj->layer_config_ranges.end(),
+                               [&opt_has_scarf_joint_seam](const auto &r) { return opt_has_scarf_joint_seam(r.second.get()); });
+        });
+
+        if (has_scarf_joint_seam) {
+            new_full_config.set("has_scarf_joint_seam", true);
+        }
+
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ", has_scarf_joint_seam:" << has_scarf_joint_seam;
+    }
+
+    //apply extruder related values
+    std::vector<int> print_variant_index;
+    if (!extruder_applied) {
+        new_full_config.update_values_to_printer_extruders(new_full_config, printer_options_with_variant_1, "printer_extruder_id", "printer_extruder_variant");
+        new_full_config.update_values_to_printer_extruders(new_full_config, printer_options_with_variant_2, "printer_extruder_id", "printer_extruder_variant", 2);
+        //update print config related with variants
+        print_variant_index = new_full_config.update_values_to_printer_extruders(new_full_config, print_options_with_variant, "print_extruder_id", "print_extruder_variant");
+
+        m_ori_full_print_config = new_full_config;
+        new_full_config.update_values_to_printer_extruders_for_multiple_filaments(new_full_config, filament_options_with_variant,  "filament_self_index", "filament_extruder_variant");
+    }
+    else {
+        int extruder_count;
+        bool different_extruder = new_full_config.support_different_extruders(extruder_count);
+        print_variant_index.resize(extruder_count);
+        for (int e_index = 0; e_index < extruder_count; e_index++)
+        {
+            print_variant_index[e_index] = e_index;
+        }
+    }
+    std::vector<int> filament_maps =  new_full_config.option<ConfigOptionInts>("filament_map")->values;
+
     // Find modified keys of the various configs. Resolve overrides extruder retract values by filament profiles.
     DynamicPrintConfig   filament_overrides;
     //BBS: add plate index
-    t_config_option_keys print_diff       = print_config_diffs(m_config, new_full_config, filament_overrides, this->m_plate_index);
+    t_config_option_keys print_diff       = print_config_diffs(m_config, new_full_config, filament_overrides, this->m_plate_index, filament_maps);
     t_config_option_keys full_config_diff = full_print_config_diffs(m_full_print_config, new_full_config, this->m_plate_index);
     // Collect changes to object and region configs.
     t_config_option_keys object_diff      = m_default_object_config.diff(new_full_config);
     t_config_option_keys region_diff      = m_default_region_config.diff(new_full_config);
+
+    //BBS: process the filament_map related logic
+    std::unordered_set<std::string> print_diff_set(print_diff.begin(), print_diff.end());
+    if (print_diff_set.find("filament_map_mode") == print_diff_set.end())
+    {
+        FilamentMapMode map_mode = new_full_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value;
+        if (map_mode < fmmManual) {
+            if (print_diff_set.find("filament_map") != print_diff_set.end()) {
+                print_diff_set.erase("filament_map");
+                //full_config_diff.erase("filament_map");
+                ConfigOptionInts* old_opt = m_full_print_config.option<ConfigOptionInts>("filament_map", true);
+                ConfigOptionInts* new_opt = new_full_config.option<ConfigOptionInts>("filament_map", true);
+                old_opt->set(new_opt);
+                m_config.filament_map = *new_opt;
+            }
+        }
+        else {
+            print_diff_set.erase("extruder_ams_count");
+            std::vector<int> old_filament_map = m_config.filament_map.values;
+            std::vector<int> new_filament_map = new_full_config.option<ConfigOptionInts>("filament_map", true)->values;
+
+            if (old_filament_map.size() == new_filament_map.size())
+            {
+                bool same_map = true;
+                for (size_t index = 0; index < old_filament_map.size(); index++)
+                {
+                    if ((old_filament_map[index] == new_filament_map[index])
+                        || (used_filament_set.find(index) == used_filament_set.end()))
+                        continue;
+                    else {
+                        same_map = false;
+                        break;
+                    }
+                }
+                if (same_map)
+                    print_diff_set.erase("filament_map");
+            }
+        }
+        if (print_diff_set.size() != print_diff.size())
+            print_diff.assign(print_diff_set.begin(), print_diff_set.end());
+    }
 
     // Do not use the ApplyStatus as we will use the max function when updating apply_status.
     unsigned int apply_status = APPLY_STATUS_UNCHANGED;
@@ -1287,8 +1479,8 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
         // Check whether a model part volume was added or removed, their transformations or order changed.
         // Only volume IDs, volume types, transformation matrices and their order are checked, configuration and other parameters are NOT checked.
         bool solid_or_modifier_differ   = model_volume_list_changed(model_object, model_object_new, solid_or_modifier_types) ||
-                                          model_mmu_segmentation_data_changed(model_object, model_object_new) ||
-                                          (model_object_new.is_mm_painted() && num_extruders_changed );
+                                          model_mmu_segmentation_data_changed(model_object, model_object_new) || (model_object_new.is_mm_painted() && num_extruders_changed) ||
+                                          model_custom_fuzzy_skin_data_changed(model_object, model_object_new);
         bool supports_differ            = model_volume_list_changed(model_object, model_object_new, ModelVolumeType::SUPPORT_BLOCKER) ||
                                           model_volume_list_changed(model_object, model_object_new, ModelVolumeType::SUPPORT_ENFORCER);
         bool layer_height_ranges_differ = ! layer_height_ranges_equal(model_object.layer_config_ranges, model_object_new.layer_config_ranges, model_object_new.layer_height_profile.empty());
@@ -1351,7 +1543,7 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
 			if (object_config_changed)
 				model_object.config.assign_config(model_object_new.config);
             if (! object_diff.empty() || object_config_changed || num_extruders_changed ) {
-                PrintObjectConfig new_config = PrintObject::object_config_from_model_object(m_default_object_config, model_object, num_extruders );
+                PrintObjectConfig new_config = PrintObject::object_config_from_model_object(m_default_object_config, model_object, num_extruders, print_variant_index);
                 for (const PrintObjectStatus &print_object_status : print_object_status_db.get_range(model_object)) {
                     t_config_option_keys diff = print_object_status.print_object->config().diff(new_config);
                     if (! diff.empty()) {
@@ -1388,7 +1580,10 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
 	        	// Synchronize the content of instances.
 	        	auto new_instance = model_object_new.instances.begin();
 				for (auto old_instance = model_object.instances.begin(); old_instance != model_object.instances.end(); ++ old_instance, ++ new_instance) {
-					(*old_instance)->set_transformation((*new_instance)->get_transformation());
+                    if (is_printable_filament_changed(new_full_config, (*old_instance)->convex_hull_2d(), (*new_instance)->convex_hull_2d())) {
+                        update_apply_status(this->invalidate_steps({psWipeTower, psGCodeExport}));
+                    }
+                    (*old_instance)->set_transformation((*new_instance)->get_transformation());
                     (*old_instance)->print_volume_state = (*new_instance)->print_volume_state;
                     (*old_instance)->printable 		    = (*new_instance)->printable;
   				}
@@ -1413,10 +1608,10 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
             // Generate a list of trafos and XY offsets for instances of a ModelObject
             // Producing the config for PrintObject on demand, caching it at print_object_last.
             const PrintObject *print_object_last = nullptr;
-            auto print_object_apply_config = [this, &print_object_last, model_object, num_extruders ](PrintObject *print_object) {
+            auto print_object_apply_config = [this, &print_object_last, model_object, num_extruders, &print_variant_index](PrintObject *print_object) {
                 print_object->config_apply(print_object_last ?
                     print_object_last->config() :
-                    PrintObject::object_config_from_model_object(m_default_object_config, *model_object, num_extruders ));
+                    PrintObject::object_config_from_model_object(m_default_object_config, *model_object, num_extruders, print_variant_index));
                 print_object_last = print_object;
             };
             if (old.empty()) {
@@ -1449,8 +1644,10 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
                 } else {
                     // The PrintObject already exists and the copies differ.
 					PrintBase::ApplyStatus status = (*it_old)->print_object->set_instances(std::move(new_instances.instances));
-                    if (status != PrintBase::APPLY_STATUS_UNCHANGED)
-						update_apply_status(status == PrintBase::APPLY_STATUS_INVALIDATED);
+                    if (status != PrintBase::APPLY_STATUS_UNCHANGED) {
+                        size_t extruder_num = new_full_config.option<ConfigOptionFloatsNullable>("nozzle_diameter")->size();
+                        update_apply_status(status == PrintBase::APPLY_STATUS_INVALIDATED);
+                    }
 					print_objects_new.emplace_back((*it_old)->print_object);
 					const_cast<PrintObjectStatus*>(*it_old)->status = PrintObjectStatus::Reused;
 				}
@@ -1573,7 +1770,8 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
                         for (auto it = it_print_object; it != it_print_object_end; ++it)
                             if ((*it)->m_shared_regions != nullptr)
                                 update_apply_status((*it)->invalidate_state_by_config_options(old_config, new_config, diff_keys));
-                    })) {
+                    },
+                    print_variant_index)) {
                 // Regions are valid, just keep them.
             } else {
                 // Regions were reshuffled.
@@ -1594,7 +1792,9 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
                 model_object_status.print_instances.front().trafo,
                 num_extruders ,
                 print_object.is_mm_painted() ? 0.f : float(print_object.config().xy_contour_compensation.value),
-                painting_extruders);
+                painting_extruders,
+                print_variant_index,
+                print_object.is_fuzzy_skin_painted());
         }
         for (auto it = it_print_object; it != it_print_object_end; ++it)
             if ((*it)->m_shared_regions) {

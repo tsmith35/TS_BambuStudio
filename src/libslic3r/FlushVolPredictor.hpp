@@ -35,25 +35,17 @@ namespace FlushPredict
 
 }
 
+class FlushVolPredictor;
 
-// Singleton pattern
-class FlushVolPredictor
+class GenericFlushPredictor
 {
     using RGB = FlushPredict::RGBColor;
 public:
-    bool predict(const RGB& from,const RGB& to , float& flush);
-    static FlushVolPredictor& get_instance();
+    explicit GenericFlushPredictor(const int dataset_value);
+    bool predict(const RGB& from, const RGB& to, float& flush);
+    int get_min_flush_volume();
 private:
-    FlushVolPredictor(const std::string& data_file);
-    FlushVolPredictor(const FlushVolPredictor&) = delete;
-    FlushVolPredictor& operator=(const FlushVolPredictor&) = delete;
-    ~FlushVolPredictor() = default;
-
-    uint64_t generate_hash_key(const RGB& from, const RGB& to);
-private:
-    std::unordered_map<uint64_t, float> m_flush_map;
-    std::vector<RGB> m_colors;
-    bool m_valid;
+    FlushVolPredictor* predictor{ nullptr };
 };
 
 

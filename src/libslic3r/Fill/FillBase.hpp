@@ -35,6 +35,15 @@ public:
     InfillFailedException() : Slic3r::RuntimeError("Infill failed") {}
 };
 
+struct LockRegionParam
+{
+    LockRegionParam() {}
+    std::map<float, ExPolygons> skin_density_params;
+    std::map<float, ExPolygons> skeleton_density_params;
+    std::map<Flow, ExPolygons>  skin_flow_params;
+    std::map<Flow, ExPolygons>  skeleton_flow_params;
+};
+
 struct FillParams
 {
     bool        full_infill() const { return density > 0.9999f; }
@@ -76,6 +85,13 @@ struct FillParams
     float           no_extrusion_overlap{ 0.0 };
     bool            dont_sort{ false }; // do not sort the lines, just simply connect them
     bool            can_reverse{true};
+
+    float           horiz_move{0.0}; //move infill to get cross zag pattern
+    bool            symmetric_infill_y_axis{false};
+    coord_t         symmetric_y_axis{0};
+    bool            locked_zag{false};
+    float           infill_lock_depth{0.0};
+    float           skin_infill_depth{0.0};
 };
 static_assert(IsTriviallyCopyable<FillParams>::value, "FillParams class is not POD (and it should be - see constructor).");
 
@@ -116,20 +132,38 @@ public:
     static bool  use_bridge_flow(const InfillPattern type);
 
     void         set_bounding_box(const Slic3r::BoundingBox &bbox) { bounding_box = bbox; }
-
+    BoundingBox  extended_object_bounding_box() const;
     // Use bridge flow for the fill?
     virtual bool use_bridge_flow() const { return false; }
 
     // Do not sort the fill lines to optimize the print head path?
     virtual bool no_sort() const { return false; }
 
+    virtual bool is_self_crossing() = 0;
+
+    // Return true if infill has a consistent pattern between layers.
+    virtual bool has_consistent_pattern() const { return false; }
+
     // Perform the fill.
     virtual Polylines fill_surface(const Surface *surface, const FillParams &params);
     virtual ThickPolylines fill_surface_arachne(const Surface* surface, const FillParams& params);
-
+    virtual void set_lock_region_param(const LockRegionParam &lock_param){};
+    virtual void set_skin_and_skeleton_pattern(const InfillPattern &skin_pattern, const InfillPattern &skeleton_pattern){};
     // BBS: this method is used to fill the ExtrusionEntityCollection.
     // It call fill_surface by default
-    virtual void fill_surface_extrusion(const Surface* surface, const FillParams& params, ExtrusionEntitiesPtr& out);
+    virtual void fill_surface_extrusion(const Surface *surface, const FillParams &params, ExtrusionEntitiesPtr &out);
+    virtual void copy_fill_data(const Fill *f){
+        layer_id              = f->layer_id;
+        z                     = f->z;
+        spacing               = f->spacing;
+        overlap               = f->overlap;
+        angle                 = f->angle;
+        link_max_length       = f->link_max_length;
+        loop_clipping         = f->loop_clipping;
+        bounding_box          = f->bounding_box;
+        adapt_fill_octree     = f->adapt_fill_octree;
+        no_overlap_expolygons = f->no_overlap_expolygons;
+    };
 
 protected:
     Fill() :
@@ -148,11 +182,11 @@ protected:
 
     // The expolygon may be modified by the method to avoid a copy.
     virtual void    _fill_surface_single(
-        const FillParams                & /* params */, 
+        const FillParams                & /* params */,
         unsigned int                      /* thickness_layers */,
-        const std::pair<float, Point>   & /* direction */, 
+        const std::pair<float, Point>   & /* direction */,
         ExPolygon                         /* expolygon */,
-        Polylines                       & /* polylines_out */) {};
+        Polylines                       & /* polylines_out */) {}
 
     // Used for concentric infill to generate ThickPolylines using Arachne.
     virtual void _fill_surface_single(const FillParams& params,

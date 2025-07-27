@@ -32,7 +32,21 @@ struct Camera
         Perspective,
         Num_types
     };
-
+    enum class ViewAngleType : unsigned char {
+        Iso = 0,
+        Top_Front,
+        Left,
+        Right,
+        Top,
+        Bottom,
+        Front,
+        Rear,
+        Count_ViewAngleType,
+        Top_Plate,//for 3mf and Skip parts
+        Iso_1,//clockwise rotate 90 degrees on the basis of Iso
+        Iso_2,//clockwise rotate 180 degrees on the basis of Iso
+        Iso_3,//clockwise rotate 270 degrees on the basis of Iso
+    };
     bool requires_zoom_to_bed{ false };
     //BBS
     bool requires_zoom_to_volumes{ false };
@@ -56,8 +70,6 @@ private:
     std::pair<double, double> m_frustrum_zs;
 
     BoundingBoxf3 m_scene_box;
-    float         m_scene_box_radius{0};
-    float         m_last_scene_box_radius{0};
     Frustum       m_frustum;
     Vec3f         m_last_eye, m_last_center, m_last_up;
     float         m_last_near, m_last_far, m_last_aspect, m_last_fov,m_last_zoom;
@@ -94,10 +106,11 @@ public:
 
 
     void select_view(const std::string& direction);
-
+    void select_view(ViewAngleType type);
     const std::array<int, 4>& get_viewport() const { return m_viewport; }
     const Transform3d& get_view_matrix() const { return m_view_matrix; }
     const Transform3d& get_projection_matrix() const { return m_projection_matrix; }
+    const Transform3d get_view_matrix_for_billboard() const;
 
     //BBS
     const Eigen::Quaterniond& get_view_rotation() const {return m_view_rotation; }
@@ -116,7 +129,6 @@ public:
     double get_fov() const;
 
     void apply_viewport(int x, int y, unsigned int w, unsigned int h);
-    void apply_view_matrix();
     // Calculates and applies the projection matrix tighting the frustrum z range around the given box.
     // If larger z span is needed, pass the desired values of near and far z (negative values are ignored)
     void apply_projection(const BoundingBoxf3& box, double near_z = -1.0, double far_z = -1.0);
@@ -140,7 +152,7 @@ public:
 
     // rotate the camera around three axes parallel to the camera local axes and passing through m_target
     void rotate_local_around_target(const Vec3d& rotation_rad);
-
+    void set_rotation(const Transform3d &rotation);
     // returns true if the camera z axis (forward) is pointing in the negative direction of the world z axis
     bool is_looking_downward() const { return get_dir_forward().dot(Vec3d::UnitZ()) < 0.0; }
     bool is_looking_front() const { return abs(get_dir_up().dot(Vec3d::UnitZ())-1) < 0.001; }
@@ -149,9 +161,6 @@ public:
         if (std::abs(get_dir_right()(2)) > EPSILON)
             look_at(get_position(), m_target, Vec3d::UnitZ());
     }
-
-    //BBS store and load camera view
-    void load_camera_view(Camera& cam);
 
     void look_at(const Vec3d& position, const Vec3d& target, const Vec3d& up);
 
@@ -167,7 +176,7 @@ private:
     void   set_distance(double distance);
 
     void set_default_orientation();
-    void set_iso_orientation();
+    void set_iso_orientation(ViewAngleType va_type = ViewAngleType::Iso);
     Vec3d validate_target(const Vec3d& target) const;
     void update_zenit();
     void update_target();

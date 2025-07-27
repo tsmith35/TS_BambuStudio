@@ -23,7 +23,6 @@
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/filesystem.hpp>
-#include <boost/filesystem/string_file.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/nowide/iostream.hpp>
@@ -49,8 +48,9 @@
 
 namespace Slic3r {
 const std::vector<std::string> CONST_FILAMENTS = {
-    "", "4", "8", "0C", "1C", "2C", "3C", "4C", "5C", "6C", "7C", "8C", "9C", "AC", "BC", "CC", "DC",
-}; // 5                           10                            15    16
+    "",   "4",  "8",  "0C", "1C",  "2C",  "3C",  "4C",  "5C",  "6C",  "7C",  "8C",  "9C",  "AC",  "BC",  "CC","DC",//16
+         "EC", "0FC", "1FC", "2FC", "3FC", "4FC", "5FC", "6FC", "7FC", "8FC", "9FC", "AFC", "BFC", "CFC", "DFC", "EFC",//32
+}; //      1                         5                                 10                                 15    16
     // BBS initialization of static variables
     std::map<size_t, ExtruderParams> Model::extruderParamsMap = { {0,{"",0,0}}};
     GlobalSpeedMap Model::printSpeedMap{};
@@ -196,26 +196,34 @@ Model Model::read_from_step(const std::string&                                  
     Model model;
     bool result = false;
     bool is_cb_cancel = false;
-    std::string message;
-    Step step_file(input_file);
-    step_file.load();
+    Step::Step_Status status;
+    Step step_file(input_file, stepFn);
+    status = step_file.load();
+    if(status != Step::Step_Status::LOAD_SUCCESS) {
+        goto _finished;
+    }
     if (step_mesh_fn) {
         if (step_mesh_fn(step_file, linear_defletion, angle_defletion, is_split_compound) == -1) {
+            status = Step::Step_Status::CANCEL;
+            goto _finished;
+        }
+    }
+    
+    status = step_file.mesh(&model, is_cb_cancel, is_split_compound, linear_defletion, angle_defletion);
+
+_finished:
+
+    switch (status){
+        case Step::Step_Status::CANCEL: {
             Model empty_model;
             return empty_model;
         }
-    }
-    result = load_step(input_file.c_str(), &model, is_cb_cancel, linear_defletion, angle_defletion, is_split_compound, stepFn, stepIsUtf8Fn);
-    if (is_cb_cancel) {
-        Model empty_model;
-        return empty_model;
-    }
-
-    if (!result) {
-        if (message.empty())
+        case Step::Step_Status::LOAD_ERROR:
             throw Slic3r::RuntimeError(_L("Loading of a model file failed."));
-        else
-            throw Slic3r::RuntimeError(message);
+        case Step::Step_Status::MESH_ERROR:
+            throw Slic3r::RuntimeError(_L("Meshing of a model file failed or no valid shape."));
+        default:
+            break;
     }
 
     if (model.objects.empty())
@@ -257,12 +265,10 @@ Model Model::read_from_file(const std::string&                                  
         config_substitutions = &temp_config_substitutions_context;
     //BBS: plate_data
     PlateDataPtrs temp_plate_data;
-    bool temp_is_xxx;
     Semver temp_version;
     if (plate_data == nullptr)
         plate_data = &temp_plate_data;
-    if (is_xxx == nullptr)
-        is_xxx = &temp_is_xxx;
+
     if (file_version == nullptr)
         file_version = &temp_version;
 
@@ -275,24 +281,27 @@ Model Model::read_from_file(const std::string&                                  
         result = load_stl(input_file.c_str(), &model, nullptr, stlFn,256);
     else if (boost::algorithm::iends_with(input_file, ".obj")) {
         ObjInfo                 obj_info;
-        result = load_obj(input_file.c_str(), &model, obj_info, message);
+        result = load_obj(input_file.c_str(), &model, obj_info, message, nullptr, (is_xxx && *is_xxx) ? true : false);
         if (result){
-            unsigned char first_extruder_id;
+            ObjDialogInOut in_out;
+            in_out.model = &model;
+            in_out.lost_material_name = obj_info.lost_material_name;
+            in_out.ml_region          = obj_info.ml_region;
+            in_out.ml_name            = obj_info.ml_name;
+            in_out.ml_id              = obj_info.ml_id;
             if (obj_info.vertex_colors.size() > 0) {
-                std::vector<unsigned char> vertex_filament_ids;
                 if (objFn) { // 1.result is ok and pop up a dialog
-                    objFn(obj_info.vertex_colors, false, vertex_filament_ids, first_extruder_id, obj_info.ml_region, obj_info.ml_name, obj_info.ml_id);
-                    if (vertex_filament_ids.size() > 0) {
-                        result = obj_import_vertex_color_deal(vertex_filament_ids, first_extruder_id, & model);
-                    }
+                    in_out.input_colors      = std::move(obj_info.vertex_colors);
+                    in_out.is_single_color   = false;
+                    in_out.deal_vertex_color = true;
+                    objFn(in_out);
                 }
             } else if (obj_info.face_colors.size() > 0 && obj_info.has_uv_png == false) { // mtl file
-                std::vector<unsigned char> face_filament_ids;
                 if (objFn) { // 1.result is ok and pop up a dialog
-                    objFn(obj_info.face_colors, obj_info.is_single_mtl, face_filament_ids, first_extruder_id, obj_info.ml_region, obj_info.ml_name, obj_info.ml_id);
-                    if (face_filament_ids.size() > 0) {
-                        result = obj_import_face_color_deal(face_filament_ids, first_extruder_id, &model);
-                    }
+                    in_out.input_colors      = std::move(obj_info.face_colors);
+                    in_out.is_single_color   = obj_info.is_single_mtl;
+                    in_out.deal_vertex_color = false;
+                    objFn(in_out);
                 }
             } /*else if (obj_info.has_uv_png && obj_info.uvs.size() > 0) {
                 boost::filesystem::path full_path(input_file);
@@ -964,28 +973,30 @@ std::string Model::get_backup_path()
         buf << this->id().id;
 
         backup_path = parent_path.string() + buf.str();
-        BOOST_LOG_TRIVIAL(info) << boost::format("model %1%, id %2%, backup_path empty, set to %3%")%this%this->id().id%backup_path;
+        std::string backup_path_safe = PathSanitizer::sanitize(backup_path);
+        BOOST_LOG_TRIVIAL(info) << boost::format("model %1%, id %2%, backup_path empty, set to %3%")%this%this->id().id % backup_path_safe;
         boost::filesystem::path temp_path(backup_path);
         if (boost::filesystem::exists(temp_path))
         {
-            BOOST_LOG_TRIVIAL(info) << boost::format("model %1%, id %2%, remove previous %3%")%this%this->id().id%backup_path;
+            BOOST_LOG_TRIVIAL(info) << boost::format("model %1%, id %2%, remove previous %3%")%this%this->id().id % backup_path_safe;
             boost::filesystem::remove_all(temp_path);
         }
     }
     boost::filesystem::path temp_path(backup_path);
-    try {
+    std::string temp_path_safe = PathSanitizer::sanitize(temp_path);
+    try {    
         if (!boost::filesystem::exists(temp_path))
         {
-            BOOST_LOG_TRIVIAL(info) << "create /3D/Objects in " << temp_path;
+            BOOST_LOG_TRIVIAL(info) << "create /3D/Objects in " << temp_path_safe;
             boost::filesystem::create_directories(backup_path + "/3D/Objects");
-            BOOST_LOG_TRIVIAL(info) << "create /Metadata in " << temp_path;
+            BOOST_LOG_TRIVIAL(info) << "create /Metadata in " << temp_path_safe;
             boost::filesystem::create_directories(backup_path + "/Metadata");
-            BOOST_LOG_TRIVIAL(info) << "create /lock.txt in " << temp_path;
-            boost::filesystem::save_string_file(backup_path + "/lock.txt",
+            BOOST_LOG_TRIVIAL(info) << "create /lock.txt in " << temp_path_safe;
+            save_string_file(backup_path + "/lock.txt",
                 boost::lexical_cast<std::string>(get_current_pid()));
         }
     } catch (std::exception &ex) {
-        BOOST_LOG_TRIVIAL(error) << "Failed to create backup path" << temp_path << ": " << ex.what();
+        BOOST_LOG_TRIVIAL(error) << "Failed to create backup path" << temp_path_safe << ": " << ex.what();
     }
 
     return backup_path;
@@ -997,7 +1008,7 @@ void Model::remove_backup_path_if_exist()
         boost::filesystem::path temp_path(backup_path);
         if (boost::filesystem::exists(temp_path))
         {
-            BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format("model %1%, id %2% remove backup_path %3%")%this%this->id().id%backup_path;
+            BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format("model %1%, id %2% remove backup_path %3%") % this % this->id().id % PathSanitizer::sanitize(backup_path);
             boost::filesystem::remove_all(temp_path);
         }
 	backup_path.clear();
@@ -1009,11 +1020,11 @@ std::string Model::get_backup_path(const std::string &sub_path)
     auto path = get_backup_path() + "/" + sub_path;
     try {
         if (!boost::filesystem::exists(path)) {
-            BOOST_LOG_TRIVIAL(info) << "create missing sub_path" << path;
+            BOOST_LOG_TRIVIAL(info) << "create missing sub_path" << PathSanitizer::sanitize(path);
             boost::filesystem::create_directories(path);
         }
     } catch (std::exception &ex) {
-        BOOST_LOG_TRIVIAL(error) << "Failed to create missing sub_path" << path << ": " << ex.what();
+        BOOST_LOG_TRIVIAL(error) << "Failed to create missing sub_path" << PathSanitizer::sanitize(path) << ": " << ex.what();
     }
     return path;
 }
@@ -1027,11 +1038,11 @@ void Model::set_backup_path(std::string const& path)
         return;
     }
     if (!backup_path.empty()) {
-        BOOST_LOG_TRIVIAL(info) << __FUNCTION__<<boost::format(", model %1%, id %2%, remove previous backup %3%")%this%this->id().id%backup_path;
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", model %1%, id %2%, remove previous backup %3%") % this % this->id().id % PathSanitizer::sanitize(backup_path);
         Slic3r::remove_backup(*this, true);
     }
     backup_path = path;
-    BOOST_LOG_TRIVIAL(info) << __FUNCTION__<<boost::format(", model %1%, id %2%, set backup to %3%")%this%this->id().id%backup_path;
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", model %1%, id %2%, set backup to %3%") % this % this->id().id % PathSanitizer::sanitize(backup_path);
 }
 
 void Model::load_from(Model& model)
@@ -1359,6 +1370,11 @@ bool ModelObject::is_seam_painted() const
 bool ModelObject::is_mm_painted() const
 {
     return std::any_of(this->volumes.cbegin(), this->volumes.cend(), [](const ModelVolume *mv) { return mv->is_mm_painted(); });
+}
+
+bool ModelObject::is_fuzzy_skin_painted() const
+{
+    return std::any_of(this->volumes.cbegin(), this->volumes.cend(), [](const ModelVolume *mv) { return mv->is_fuzzy_skin_facets_painted(); });
 }
 
 void ModelObject::sort_volumes(bool full_sort)
@@ -1794,6 +1810,7 @@ void ModelObject::convert_units(ModelObjectPtrs& new_objects, ConversionType con
             vol->source.is_from_builtin_objects = volume->source.is_from_builtin_objects;
 
             vol->supported_facets.assign(volume->supported_facets);
+            vol->fuzzy_skin_facets.assign(volume->fuzzy_skin_facets);
             vol->seam_facets.assign(volume->seam_facets);
             vol->mmu_segmentation_facets.assign(volume->mmu_segmentation_facets);
 
@@ -2314,6 +2331,7 @@ ModelObjectPtrs ModelObject::cut(size_t instance, std::array<Vec3d, 4> plane_poi
         const auto volume_matrix = volume->get_matrix();
 
         volume->supported_facets.reset();
+        volume->fuzzy_skin_facets.reset();
         volume->seam_facets.reset();
         volume->mmu_segmentation_facets.reset();
 
@@ -2404,6 +2422,7 @@ ModelObjectPtrs ModelObject::segment(size_t instance, unsigned int max_extruders
         const auto volume_matrix = volume->get_matrix();
 
         volume->supported_facets.reset();
+        volume->fuzzy_skin_facets.reset();
         volume->seam_facets.reset();
 
         if (!volume->is_model_part()) {
@@ -2830,7 +2849,24 @@ unsigned int ModelObject::update_instances_print_volume_state(const BuildVolume 
                 }
 
                 const Transform3d matrix = model_instance->get_matrix() * vol->get_matrix();
-                BuildVolume::ObjectState state = build_volume.object_state(vol->mesh().its, matrix.cast<float>(), true /* may be below print bed */);
+                BuildVolume::ObjectState state;
+                switch(build_volume.type())
+                {
+                    case BuildVolume::Type::Rectangle:
+                    {
+                        BoundingBoxf3 transformed_bb = vol->get_convex_hull().transformed_bounding_box(matrix);
+                        state = build_volume.volume_state_bbox(transformed_bb);
+                        //state = build_volume.object_state(vol->mesh().its, matrix.cast<float>(), true /* may be below print bed */);
+                        break;
+                    }
+                    case BuildVolume::Type::Circle:
+                    case BuildVolume::Type::Convex:
+                    case BuildVolume::Type::Custom:
+                    default:
+                        state = build_volume.object_state(vol->mesh().its, matrix.cast<float>(), true /* may be below print bed */);
+                        break;
+                }
+
                 if (state == BuildVolume::ObjectState::Inside)
                     // Volume is completely inside.
                     inside_outside |= INSIDE;
@@ -2964,6 +3000,7 @@ void ModelVolume::set_material_id(t_model_material_id material_id)
 
 void ModelVolume::reset_extra_facets() {
     this->supported_facets.reset();
+    this->fuzzy_skin_facets.reset();
     this->seam_facets.reset();
     this->mmu_segmentation_facets.reset();
 }
@@ -3085,6 +3122,17 @@ void ModelVolume::update_extruder_count(size_t extruder_count)
     }
 }
 
+void ModelVolume::update_extruder_count_when_delete_filament(size_t extruder_count, size_t filament_id, int replace_filament_id)
+{
+    std::vector<int> used_extruders = get_extruders();
+    for (int extruder_id : used_extruders) {
+        if (extruder_id >= filament_id) {
+            mmu_segmentation_facets.set_enforcer_block_type_limit(*this, (EnforcerBlockerType)(extruder_count), (EnforcerBlockerType)(filament_id), (EnforcerBlockerType)(replace_filament_id));
+            break;
+        }
+    }
+}
+
 void ModelVolume::center_geometry_after_creation(bool update_source_offset)
 {
     Vec3d shift = this->mesh().bounding_box().center();
@@ -3117,11 +3165,9 @@ void  ModelVolume::calculate_convex_hull_2d(const Geometry::Transformation &tran
         return;
 
     Points pts;
-    Vec3d rotation = transformation.get_rotation();
-    Vec3d mirror = transformation.get_mirror();
-    Vec3d scale = transformation.get_scaling_factor();
-    //rotation(2) = 0.f;
-    Transform3d new_matrix = Geometry::assemble_transform(Vec3d::Zero(), rotation, scale, mirror);
+    Geometry::Transformation new_trans(transformation);
+    new_trans.reset_offset();
+    Transform3d new_matrix = new_trans.get_matrix();
 
     pts.reserve(its.vertices.size());
     // Using the shared vertices should be a bit quicker than using the STL faces.
@@ -3190,6 +3236,14 @@ const Polygon& ModelVolume::get_convex_hull_2d(const Transform3d &trafo_instance
     }
 
     return m_convex_hull_2d;
+}
+
+void ModelVolume::set_transformation(const Geometry::Transformation &transformation) {
+    m_transformation = transformation;
+}
+
+void ModelVolume::set_transformation(const Transform3d &trafo) {
+    m_transformation.set_from_transform(trafo);
 }
 
 int ModelVolume::get_repaired_errors_count() const
@@ -3282,6 +3336,7 @@ size_t ModelVolume::split(unsigned int max_extruders, float scale_det)
             this->mmu_segmentation_facets.reset();
             this->exterior_facets.reset();
             this->supported_facets.reset();
+            this->fuzzy_skin_facets.reset();
             this->seam_facets.reset();
             for (size_t i = 0; i < cur_face_count; i++) {
                 if (ships[idx].find(i) != ships[idx].end()) {
@@ -3311,6 +3366,9 @@ size_t ModelVolume::split(unsigned int max_extruders, float scale_det)
         this->object->volumes[ivolume]->config.set("extruder", this->extruder_id());
         //this->object->volumes[ivolume]->config.set("extruder", auto_extruder_id(max_extruders, extruder_counter));
         this->object->volumes[ivolume]->m_is_splittable = 0;
+        if (this->is_text()) {
+            this->object->volumes[ivolume]->clear_text_info();
+        }
         ++ idx;
         last_all_mesh_face_count += cur_face_count;
     }
@@ -3358,6 +3416,7 @@ void ModelVolume::assign_new_unique_ids_recursive()
     ObjectBase::set_new_unique_id();
     config.set_new_unique_id();
     supported_facets.set_new_unique_id();
+    fuzzy_skin_facets.set_new_unique_id();
     seam_facets.set_new_unique_id();
     mmu_segmentation_facets.set_new_unique_id();
 }
@@ -3442,14 +3501,70 @@ void ModelVolume::convert_from_meters()
     this->source.is_converted_from_meters = true;
 }
 
+void ModelVolume::set_text_configuration(const TextConfiguration text_configuration) {
+    m_text_info.text_configuration = text_configuration;
+}
+
 const Transform3d &ModelVolume::get_matrix(bool dont_translate, bool dont_rotate, bool dont_scale, bool dont_mirror) const
 {
     return m_transformation.get_matrix(dont_translate, dont_rotate, dont_scale, dont_mirror);
 }
 
+void ModelInstance::set_transformation(const Geometry::Transformation& transformation)
+{
+    m_transformation = transformation;
+    m_assemble_scalling_factor_dirty = true;
+}
+
+const Geometry::Transformation& ModelInstance::get_assemble_transformation() const
+{
+    if (m_assemble_scalling_factor_dirty)
+    {
+        m_assemble_transformation.set_scaling_factor(m_transformation.get_scaling_factor());
+        m_assemble_scalling_factor_dirty = false;
+    }
+    return m_assemble_transformation;
+}
+
+void ModelInstance::set_assemble_transformation(const Geometry::Transformation &transformation)
+{
+    m_assemble_initialized    = true;
+    m_assemble_transformation = transformation;
+}
+
+void ModelInstance::set_assemble_from_transform(const Transform3d &transform)
+{
+    m_assemble_initialized = true;
+    m_assemble_transformation.set_from_transform(transform);
+}
+
+void ModelInstance::set_assemble_offset(const Vec3d &offset)
+{
+    m_assemble_initialized = true;
+    m_assemble_transformation.set_offset(offset);
+}
+
+void ModelInstance::set_scaling_factor(const Vec3d& scaling_factor)
+{
+    m_transformation.set_scaling_factor(scaling_factor);
+    m_assemble_scalling_factor_dirty = true;
+}
+
+void ModelInstance::set_scaling_factor(Axis axis, double scaling_factor)
+{
+    m_transformation.set_scaling_factor(axis, scaling_factor);
+    m_assemble_scalling_factor_dirty = true;
+}
+
 void ModelInstance::transform_mesh(TriangleMesh* mesh, bool dont_translate) const
 {
     mesh->transform(get_matrix(dont_translate));
+}
+
+void ModelInstance::rotate(Matrix3d rotation_matrix)
+{
+    auto new_rotation_mat = Transform3d(rotation_matrix) * m_transformation.get_rotation_matrix();
+    m_transformation.set_rotation_matrix(new_rotation_mat);
 }
 
 BoundingBoxf3 ModelInstance::transform_mesh_bounding_box(const TriangleMesh& mesh, bool dont_translate) const
@@ -3511,32 +3626,34 @@ const Transform3d &ModelInstance::get_matrix(bool dont_translate, bool dont_rota
 void Model::setPrintSpeedTable(const DynamicPrintConfig& config, const PrintConfig& print_config) {
     //Slic3r::DynamicPrintConfig config = wxGetApp().preset_bundle->full_config();
     printSpeedMap.maxSpeed = 0;
+
+    // todo multi_extruders: the following parameters need get exact filament id
     if (config.has("inner_wall_speed")) {
-        printSpeedMap.perimeterSpeed = config.opt_float("inner_wall_speed");
+        printSpeedMap.perimeterSpeed = config.opt_float_nullable("inner_wall_speed", 0);
         if (printSpeedMap.perimeterSpeed > printSpeedMap.maxSpeed)
             printSpeedMap.maxSpeed = printSpeedMap.perimeterSpeed;
     }
     if (config.has("outer_wall_speed")) {
-        printSpeedMap.externalPerimeterSpeed = config.opt_float("outer_wall_speed");
+        printSpeedMap.externalPerimeterSpeed = config.opt_float_nullable("outer_wall_speed", 0);
         printSpeedMap.maxSpeed = std::max(printSpeedMap.maxSpeed, printSpeedMap.externalPerimeterSpeed);
     }
     if (config.has("sparse_infill_speed")) {
-        printSpeedMap.infillSpeed = config.opt_float("sparse_infill_speed");
+        printSpeedMap.infillSpeed = config.opt_float_nullable("sparse_infill_speed", 0);
         if (printSpeedMap.infillSpeed > printSpeedMap.maxSpeed)
             printSpeedMap.maxSpeed = printSpeedMap.infillSpeed;
     }
     if (config.has("internal_solid_infill_speed")) {
-        printSpeedMap.solidInfillSpeed = config.opt_float("internal_solid_infill_speed");
+        printSpeedMap.solidInfillSpeed = config.opt_float_nullable("internal_solid_infill_speed", 0);
         if (printSpeedMap.solidInfillSpeed > printSpeedMap.maxSpeed)
             printSpeedMap.maxSpeed = printSpeedMap.solidInfillSpeed;
     }
     if (config.has("top_surface_speed")) {
-        printSpeedMap.topSolidInfillSpeed = config.opt_float("top_surface_speed");
+        printSpeedMap.topSolidInfillSpeed = config.opt_float_nullable("top_surface_speed", 0);
         if (printSpeedMap.topSolidInfillSpeed > printSpeedMap.maxSpeed)
             printSpeedMap.maxSpeed = printSpeedMap.topSolidInfillSpeed;
     }
     if (config.has("support_speed")) {
-        printSpeedMap.supportSpeed = config.opt_float("support_speed");
+        printSpeedMap.supportSpeed = config.opt_float_nullable("support_speed", 0);
 
         if (printSpeedMap.supportSpeed > printSpeedMap.maxSpeed)
             printSpeedMap.maxSpeed = printSpeedMap.supportSpeed;
@@ -3562,12 +3679,13 @@ void Model::setPrintSpeedTable(const DynamicPrintConfig& config, const PrintConf
 }
 
 // find temperature of heatend and bed and matierial of an given extruder
-void Model::setExtruderParams(const DynamicPrintConfig& config, int extruders_count) {
+void Model::setExtruderParams(const DynamicPrintConfig &config, int filament_count)
+{
     extruderParamsMap.clear();
     //Slic3r::DynamicPrintConfig config = wxGetApp().preset_bundle->full_config();
     // BBS
     //int numExtruders = wxGetApp().preset_bundle->filament_presets.size();
-    for (unsigned int i = 0; i != extruders_count; ++i) {
+    for (unsigned int i = 0; i != filament_count; ++i) {
         std::string matName = "";
         // BBS
         int bedTemp = 35;
@@ -3576,7 +3694,7 @@ void Model::setExtruderParams(const DynamicPrintConfig& config, int extruders_co
             matName = config.opt_string("filament_type", i);
         }
         if (config.has("nozzle_temperature")) {
-            endTemp = config.opt_int("nozzle_temperature", i);
+            endTemp = config.opt_int_nullable("nozzle_temperature", i);
         }
 
         // FIXME: curr_bed_type is now a plate config rather than a global config.
@@ -3596,6 +3714,7 @@ static void get_real_filament_id(const unsigned char &id, std::string &result) {
     if (id < CONST_FILAMENTS.size()) {
         result = CONST_FILAMENTS[id];
     } else {
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << "check error:CONST_FILAMENTS out of array ";
         result = "";//error
     }
 };
@@ -3640,6 +3759,7 @@ bool Model::obj_import_vertex_color_deal(const std::vector<unsigned char> &verte
             auto volume = obj->volumes[0];
             volume->config.set("extruder", first_extruder_id);
             auto face_count = volume->mesh().its.indices.size();
+            volume->mmu_segmentation_facets.reset();
             volume->mmu_segmentation_facets.reserve(face_count);
             if (volume->mesh().its.vertices.size() != vertex_filament_ids.size()) {
                 return false;
@@ -3651,9 +3771,6 @@ bool Model::obj_import_vertex_color_deal(const std::vector<unsigned char> &verte
                 auto filament_id2 = vertex_filament_ids[face[2]];
                 if (filament_id0 <= 1 && filament_id1 <= 1 && filament_id2 <= 2) {
                     continue;
-                }
-                if (i == 0) {
-                    std::cout << "";
                 }
                 VertexColorCase vertex_color_case;
                 unsigned char iso_index;
@@ -3733,12 +3850,17 @@ bool Model::obj_import_face_color_deal(const std::vector<unsigned char> &face_fi
             auto volume        = obj->volumes[0];
             volume->config.set("extruder", first_extruder_id);
             auto face_count    = volume->mesh().its.indices.size();
+            volume->mmu_segmentation_facets.reset();
             volume->mmu_segmentation_facets.reserve(face_count);
-            if (volume->mesh().its.indices.size() != face_filament_ids.size()) { return false; }
+            if (volume->mesh().its.indices.size() != face_filament_ids.size()) {
+                return false;
+            }
             for (size_t i = 0; i < volume->mesh().its.indices.size(); i++) {
                 auto face         = volume->mesh().its.indices[i];
                 auto filament_id = face_filament_ids[i];
-                if (filament_id <= 1) { continue; }
+                if (filament_id < 1) {
+                    continue;
+                }
                 std::string result;
                 get_real_filament_id(filament_id, result);
                 volume->mmu_segmentation_facets.set_triangle_from_string(i, result);
@@ -3763,22 +3885,23 @@ double Model::findMaxSpeed(const ModelObject* object) {
     double supportSpeedObj = Model::printSpeedMap.supportSpeed;
     double smallPerimeterSpeedObj = Model::printSpeedMap.smallPerimeterSpeed;
     for (std::string objectKey : objectKeys) {
+        // todo multi_extruders:
         if (objectKey == "inner_wall_speed"){
-            perimeterSpeedObj = object->config.opt_float(objectKey);
+            perimeterSpeedObj = object->config.get().opt_float_nullable(objectKey, 0);
             externalPerimeterSpeedObj = Model::printSpeedMap.externalPerimeterSpeed / Model::printSpeedMap.perimeterSpeed * perimeterSpeedObj;
         }
         if (objectKey == "sparse_infill_speed")
-            infillSpeedObj = object->config.opt_float(objectKey);
+            infillSpeedObj = object->config.get().opt_float_nullable(objectKey, 0);
         if (objectKey == "internal_solid_infill_speed")
-            solidInfillSpeedObj = object->config.opt_float(objectKey);
+            solidInfillSpeedObj = object->config.get().opt_float_nullable(objectKey, 0);
         if (objectKey == "top_surface_speed")
-            topSolidInfillSpeedObj = object->config.opt_float(objectKey);
+            topSolidInfillSpeedObj = object->config.get().opt_float_nullable(objectKey, 0);
         if (objectKey == "support_speed")
-            supportSpeedObj = object->config.opt_float(objectKey);
+            supportSpeedObj = object->config.get().opt_float_nullable(objectKey, 0);
         if (objectKey == "outer_wall_speed")
-            externalPerimeterSpeedObj = object->config.opt_float(objectKey);
+            externalPerimeterSpeedObj = object->config.get().opt_float_nullable(objectKey, 0);
         if (objectKey == "small_perimeter_speed")
-            smallPerimeterSpeedObj = object->config.opt_float(objectKey);
+            smallPerimeterSpeedObj = object->config.get().option<ConfigOptionFloatsOrPercentsNullable>(objectKey)->get_at(0).get_abs_value(externalPerimeterSpeedObj);
     }
     objMaxSpeed = std::max(perimeterSpeedObj, std::max(externalPerimeterSpeedObj, std::max(infillSpeedObj, std::max(solidInfillSpeedObj, std::max(topSolidInfillSpeedObj, std::max(supportSpeedObj, std::max(smallPerimeterSpeedObj,objMaxSpeed)))))));
     if (objMaxSpeed <= 0) objMaxSpeed = 250.;
@@ -3913,27 +4036,33 @@ double ModelInstance::get_auto_brim_width() const
 
 void ModelInstance::get_arrange_polygon(void *ap, const Slic3r::DynamicPrintConfig &config_global) const
 {
-//    static const double SIMPLIFY_TOLERANCE_MM = 0.1;
+    //    static const double SIMPLIFY_TOLERANCE_MM = 0.1;
 
-    Vec3d rotation = get_rotation();
-    rotation.z()   = 0.;
-    Transform3d trafo_instance =
-        Geometry::assemble_transform(get_offset().z() * Vec3d::UnitZ(), rotation, get_scaling_factor(), get_mirror());
+    Geometry::Transformation trafo_instance = get_transformation();
 
-    Polygon p = get_object()->convex_hull_2d(trafo_instance);
+    // BOOST_LOG_TRIVIAL(debug) << "get_arrange_polygon: " << object->name << " instance trans:\n"
+    //                          << trafo_instance.get_matrix().matrix() << "\n object trans:\n"
+    //                          << object->volumes.front()->get_transformation().get_matrix().matrix();
 
-//    if (!p.points.empty()) {
-//        Polygons pp{p};
-//        pp = p.simplify(scaled<double>(SIMPLIFY_TOLERANCE_MM));
-//        if (!pp.empty()) p = pp.front();
-//    }
+    trafo_instance.set_offset(Vec3d(0, 0, get_offset(Z)));
 
-    arrangement::ArrangePolygon& ret = *(arrangement::ArrangePolygon*)ap;
-    ret.poly.contour = std::move(p);
-    ret.translation  = Vec2crd{scaled(get_offset(X)), scaled(get_offset(Y))};
-    ret.rotation     = get_rotation(Z);
+    Polygon p = get_object()->convex_hull_2d(trafo_instance.get_matrix());
 
-    //BBS: add materials related information
+    //    if (!p.points.empty()) {
+    //        Polygons pp{p};
+    //        pp = p.simplify(scaled<double>(SIMPLIFY_TOLERANCE_MM));
+    //        if (!pp.empty()) p = pp.front();
+    //    }
+
+    arrangement::ArrangePolygon &ret = *(arrangement::ArrangePolygon *) ap;
+    ret.poly.contour                 = std::move(p);
+    ret.translation                  = Vec2crd{scaled(get_offset(X)), scaled(get_offset(Y))};
+    ret.rotation                     = 0;
+
+    // BBS: add materials related information
+    auto get_filament_name = [](int id) {
+        return Model::extruderParamsMap.find(id) != Model::extruderParamsMap.end() ? Model::extruderParamsMap.at(id).materialName : "PLA";
+    };
     ModelVolume *volume = NULL;
     for (size_t i = 0; i < object->volumes.size(); ++i) {
         if (object->volumes[i]->is_model_part()) {
@@ -3943,24 +4072,35 @@ void ModelInstance::get_arrange_polygon(void *ap, const Slic3r::DynamicPrintConf
                 return;
             }
             auto ve = object->volumes[i]->get_extruders();
-            ret.extrude_ids.insert(ret.extrude_ids.end(), ve.begin(), ve.end());
+            for (auto id : ve) {
+                ret.extrude_id_filament_types.insert({id, get_filament_name(id)});
+            }
         }
     }
 
     // get per-object support extruders
-    auto op = object->get_config_value<ConfigOptionBool>(config_global, "enable_support");
+    auto op                 = object->get_config_value<ConfigOptionBool>(config_global, "enable_support");
     bool is_support_enabled = op && op->getBool();
     if (is_support_enabled) {
         auto op1 = object->get_config_value<ConfigOptionInt>(config_global, "support_filament");
         auto op2 = object->get_config_value<ConfigOptionInt>(config_global, "support_interface_filament");
-        int extruder_id;
+        int  extruder_id;
         // id==0 means follow previous material, so need not be recorded
-        if (op1 && (extruder_id = op1->getInt()) > 0) ret.extrude_ids.push_back(extruder_id);
-        if (op2 && (extruder_id = op2->getInt()) > 0) ret.extrude_ids.push_back(extruder_id);
+        if (op1 && (extruder_id = op1->getInt()) > 0) ret.extrude_id_filament_types.insert({extruder_id, get_filament_name(extruder_id)});
+        if (op2 && (extruder_id = op2->getInt()) > 0) ret.extrude_id_filament_types.insert({extruder_id, get_filament_name(extruder_id)});
     }
 
-    if (ret.extrude_ids.empty()) //the default extruder
-        ret.extrude_ids.push_back(1);
+    if (ret.extrude_id_filament_types.empty()) // the default extruder
+        ret.extrude_id_filament_types.insert({1, get_filament_name(1)});
+}
+
+void ModelInstance::apply_arrange_result(const Vec2d &offs, double rotation)
+{
+    // write the transformation data into the model instance
+    rotate(Eigen::AngleAxisd(rotation, Eigen::Vector3d::UnitZ()).toRotationMatrix());
+    set_offset(X, unscale<double>(offs(X)));
+    set_offset(Y, unscale<double>(offs(Y)));
+    this->object->invalidate_bounding_box();
 }
 
 indexed_triangle_set FacetsAnnotation::get_facets(const ModelVolume& mv, EnforcerBlockerType type) const
@@ -3979,10 +4119,13 @@ void FacetsAnnotation::get_facets(const ModelVolume& mv, std::vector<indexed_tri
     selector.get_facets(facets_per_type);
 }
 
-void FacetsAnnotation::set_enforcer_block_type_limit(const ModelVolume& mv, EnforcerBlockerType max_type)
+void FacetsAnnotation::set_enforcer_block_type_limit(const ModelVolume  &mv,
+                                                     EnforcerBlockerType max_type,
+                                                     EnforcerBlockerType to_delete_filament,
+                                                     EnforcerBlockerType replace_filament)
 {
     TriangleSelector selector(mv.mesh());
-    selector.deserialize(m_data, false, max_type);
+    selector.deserialize(m_data, false, max_type, to_delete_filament, replace_filament);
     this->set(selector);
 }
 
@@ -4178,6 +4321,13 @@ bool model_custom_supports_data_changed(const ModelObject& mo, const ModelObject
     return model_property_changed(mo, mo_new,
         [](const ModelVolumeType t) { return t == ModelVolumeType::MODEL_PART; },
         [](const ModelVolume &mv_old, const ModelVolume &mv_new){ return mv_old.supported_facets.timestamp_matches(mv_new.supported_facets); });
+}
+
+bool model_custom_fuzzy_skin_data_changed(const ModelObject &mo, const ModelObject &mo_new)
+{
+    return model_property_changed(
+        mo, mo_new, [](const ModelVolumeType t) { return t == ModelVolumeType::MODEL_PART; },
+        [](const ModelVolume &mv_old, const ModelVolume &mv_new) { return mv_old.fuzzy_skin_facets.timestamp_matches(mv_new.fuzzy_skin_facets); });
 }
 
 bool model_custom_seam_data_changed(const ModelObject& mo, const ModelObject& mo_new)

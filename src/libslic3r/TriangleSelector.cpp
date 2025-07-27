@@ -166,6 +166,24 @@ void TriangleSelector::Triangle::set_division(int sides_to_split, int special_si
     this->special_side_idx = char(special_side_idx);
 }
 
+void TriangleSelector::Triangle::select_by_seed_fill()
+{
+    assert(!is_split());
+    m_selected_by_seed_fill = true;
+}
+
+void TriangleSelector::Triangle::unselect_by_seed_fill()
+{
+    assert(!is_split());
+    m_selected_by_seed_fill = false;
+}
+
+bool TriangleSelector::Triangle::is_selected_by_seed_fill() const
+{
+    assert(!is_split());
+    return m_selected_by_seed_fill;
+}
+
 inline bool is_point_inside_triangle(const Vec3f &pt, const Vec3f &p1, const Vec3f &p2, const Vec3f &p3)
 {
     // Real-time collision detection, Ericson, Chapter 3.4
@@ -474,6 +492,20 @@ void TriangleSelector::append_touching_edges(int itriangle, int vertexi, int ver
 
     if (touching.second != -1)
         process_subtriangle(touching.second, Partition::Second);
+}
+
+void TriangleSelector::append_touching_its(int itriangle, indexed_triangle_set &its) const
+{
+    if (itriangle == -1)
+        return;
+    auto& idxs= m_triangles[itriangle].verts_idxs;
+    its.indices.emplace_back(stl_triangle_vertex_indices(idxs[0], idxs[1], idxs[2]));
+    if (its.vertices.empty()) {
+        its.vertices.reserve(m_vertices.size());
+        for (int i = 0; i < m_vertices.size(); i++) {
+            its.vertices.emplace_back(m_vertices[i].v);
+        }
+    }
 }
 
 // BBS: add seed_fill_angle parameter
@@ -1094,6 +1126,17 @@ bool TriangleSelector::Circle::is_edge_inside_cursor(const Triangle &tr, const s
     return false;
 }
 
+TriangleSelector::HeightRange::HeightRange(float z_world_, const Vec3f &source_, float height_, const Transform3d &trafo_, const ClippingPlane &clipping_plane_)
+    : SinglePointCursor(Vec3f(0.f, 0.f, 0.f), source_, 1.f, trafo_, clipping_plane_), m_z_world(z_world_), m_height(height_)
+{
+    uniform_scaling = false;//HeightRange must use world cs
+    // overwrite base
+    source       = trafo * source;
+    radius       = height_;
+    radius_sqr   = Slic3r::sqr(height_);
+    trafo_normal = trafo.linear().inverse().transpose();
+}
+
 // BBS
 bool TriangleSelector::HeightRange::is_pointer_in_triangle(const Vec3f& p1_, const Vec3f& p2_, const Vec3f& p3_) const
 {
@@ -1558,7 +1601,7 @@ void TriangleSelector::get_facets_split_by_tjoints(const Vec3i &vertices, const 
         this->get_facets_split_by_tjoints(
             { vertices(0), midpoints(0), midpoints(2) },
             { this->neighbor_child(neighbors(0), vertices(1), vertices(0), Partition::Second),
-              -1, 
+              -1,
               this->neighbor_child(neighbors(2), vertices(0), vertices(2), Partition::First) },
               out_triangles);
         this->get_facets_split_by_tjoints(
@@ -1589,7 +1632,61 @@ std::vector<Vec2i> TriangleSelector::get_seed_fill_contour() const {
     return edges_out;
 }
 
-void TriangleSelector::get_seed_fill_contour_recursive(const int facet_idx, const Vec3i &neighbors, const Vec3i &neighbors_propagated, std::vector<Vec2i> &edges_out) const {
+indexed_triangle_set TriangleSelector::get_seed_fill_mesh(int &state) const
+{
+    indexed_triangle_set its;
+    std::set<int>        face_idx_set;
+    for (int facet_idx = 0; facet_idx < this->m_orig_size_indices; ++facet_idx) {
+        const Vec3i neighbors = m_neighbors[facet_idx];
+        this->get_seed_fill_its_recursive(facet_idx, neighbors, neighbors, face_idx_set, its, state);
+    }
+    return its;
+}
+
+void TriangleSelector::get_seed_fill_its_recursive(
+    int facet_idx, const Vec3i &neighbors, const Vec3i &neighbors_propagated, std::set<int> &idx_set, indexed_triangle_set &its, int &state) const
+{
+    assert(facet_idx != -1 && facet_idx < int(m_triangles.size()));
+    assert(this->verify_triangle_neighbors(m_triangles[facet_idx], neighbors));
+    const Triangle *tr = &m_triangles[facet_idx];
+    if (!tr->valid())
+        return;
+
+    if (tr->is_split()) {
+        int num_of_children = tr->number_of_split_sides() + 1;
+        if (num_of_children != 1) {
+            for (int i = 0; i < num_of_children; ++i) {
+                assert(i < int(tr->children.size()));
+                assert(tr->children[i] < int(m_triangles.size()));
+                // Recursion, deep first search over the children of this triangle.
+                // All children of this triangle were created by splitting a single source triangle of the original mesh.
+                const Vec3i child_neighbors = this->child_neighbors(*tr, neighbors, i);
+                this->get_seed_fill_its_recursive(tr->children[i], child_neighbors, this->child_neighbors_propagated(*tr, neighbors_propagated, i, child_neighbors), idx_set, its,
+                                                  state);
+            }
+        }
+    } else if (tr->is_selected_by_seed_fill()) {
+        auto select_state =  m_triangles[facet_idx].get_state();
+        if (state < 0) {
+            state = (int) select_state;
+        }
+        if (idx_set.find(facet_idx) == idx_set.end()) {
+            idx_set.insert(facet_idx);
+            append_touching_its(facet_idx, its);
+            for (int i = 0; i < 3; i++) {
+                if (select_state == m_triangles[neighbors(i)].get_state()) {
+                    if (idx_set.find(neighbors(i)) == idx_set.end()) {
+                        idx_set.insert(neighbors(i));
+                        append_touching_its(neighbors(i), its);
+                    }
+                }
+            }
+        }
+    }
+}
+
+void TriangleSelector::get_seed_fill_contour_recursive(const int facet_idx, const Vec3i &neighbors, const Vec3i &neighbors_propagated, std::vector<Vec2i> &edges_out) const
+{
     assert(facet_idx != -1 && facet_idx < int(m_triangles.size()));
     assert(this->verify_triangle_neighbors(m_triangles[facet_idx], neighbors));
     const Triangle *tr = &m_triangles[facet_idx];
@@ -1667,14 +1764,15 @@ std::pair<std::vector<std::pair<int, int>>, std::vector<bool>> TriangleSelector:
                 // In case this is leaf, we better save information about its state.
                 int n = int(tr.get_state());
                 if (n >= 3) {
-                    assert(n <= 16);
-                    if (n <= 16) {
-                        // Store "11" plus 4 bits of (n-3).
-                        data.second.insert(data.second.end(), { true, true });
-                        n -= 3;
-                        for (size_t bit_idx = 0; bit_idx < 4; ++bit_idx)
-                            data.second.push_back(n & (uint64_t(0b0001) << bit_idx));
+                    data.second.insert(data.second.end(), {true, true});
+                    n -= 3;
+                    while (n >= 15) {
+                        data.second.insert(data.second.end(), {true, true, true, true});
+                        n -= 15;
                     }
+
+                    for (size_t bit_idx = 0; bit_idx < 4; ++bit_idx)
+                        data.second.push_back(n & (uint64_t(0b0001) << bit_idx));
                 } else {
                     // Simple case, compatible with PrusaSlicer 2.3.1 and older for storing paint on supports and seams.
                     // Store 2 bits of n.
@@ -1700,7 +1798,11 @@ std::pair<std::vector<std::pair<int, int>>, std::vector<bool>> TriangleSelector:
     return out.data;
 }
 
-void TriangleSelector::deserialize(const std::pair<std::vector<std::pair<int, int>>, std::vector<bool>> &data, bool needs_reset, EnforcerBlockerType max_ebt)
+void TriangleSelector::deserialize(const std::pair<std::vector<std::pair<int, int>>, std::vector<bool>> &data,
+                                   bool                                                                  needs_reset,
+                                   EnforcerBlockerType                                                   max_ebt,
+                                   EnforcerBlockerType                                                   to_delete_filament,
+                                   EnforcerBlockerType                                                   replace_filament)
 {
     if (needs_reset)
         reset(); // dump any current state
@@ -1746,11 +1848,33 @@ void TriangleSelector::deserialize(const std::pair<std::vector<std::pair<int, in
             int num_of_children = num_of_split_sides == 0 ? 0 : num_of_split_sides + 1;
             bool is_split = num_of_children != 0;
             // Only valid if not is_split. Value of the second nibble was subtracted by 3, so it is added back.
-            auto state = is_split ? EnforcerBlockerType::NONE : EnforcerBlockerType((code & 0b1100) == 0b1100 ? next_nibble() + 3 : code >> 2);
+            auto state = EnforcerBlockerType::NONE;
+            if (!is_split) {
+                if ((code & 0b1100) == 0b1100){
+                    int next_code = next_nibble();
+                    int num       = 0;
+                    while (next_code == 0b1111) {
+                        num++;
+                        next_code = next_nibble();
+                    }
+                    state = EnforcerBlockerType(next_code + 15 * num + 3);//old:next_nibble() + 3;
+                }
+                else {
+                    state = EnforcerBlockerType(code >> 2);
+                }
+            }
 
             // BBS
-            if (state > max_ebt)
+            if (state == to_delete_filament)
+                state = replace_filament;
+            else if (to_delete_filament != EnforcerBlockerType::NONE && state != EnforcerBlockerType::NONE) {
+                state = state > to_delete_filament ? EnforcerBlockerType((int)state - 1) : state;
+            }
+
+            if (state > max_ebt) {
+                assert(false);
                 state = EnforcerBlockerType::NONE;
+            }
 
             // Only valid if is_split.
             int special_side = code >> 2;
@@ -1833,9 +1957,23 @@ bool TriangleSelector::has_facets(const std::pair<std::vector<std::pair<int, int
         auto num_children_or_state = [&next_nibble]() -> int {
             int code               = next_nibble();
             int num_of_split_sides = code & 0b11;
-            return num_of_split_sides == 0 ?
-                ((code & 0b1100) == 0b1100 ? next_nibble() + 3 : code >> 2) :
-                - num_of_split_sides - 1;
+            if (num_of_split_sides == 0) {
+                int state = 0;
+                if ((code & 0b1100) == 0b1100) {
+                    int next_code = next_nibble();
+                    int num       = 0;
+                    while (next_code == 0b1111) {
+                        num++;
+                        next_code = next_nibble();
+                    }
+                    state = next_code + 15 * num + 3; // old:next_nibble() + 3;
+                } else {
+                    state = code >> 2;
+                }
+                return state;
+            } else {
+                return -num_of_split_sides - 1;// < 0 -> negative of a number of children
+            }
         };
 
         int state = num_children_or_state();

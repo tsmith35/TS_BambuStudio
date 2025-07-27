@@ -43,7 +43,7 @@ static const std::string MODELS_STR = "models";
 
 const std::string AppConfig::SECTION_FILAMENTS = "filaments";
 const std::string AppConfig::SECTION_MATERIALS = "sla_materials";
-
+const std::string AppConfig::SECTION_EMBOSS_STYLE = "font";
 std::string AppConfig::get_language_code()
 {
     std::string get_lang = get("language");
@@ -131,7 +131,8 @@ void AppConfig::set_defaults()
 
         if (get("single_instance").empty())
             set_bool("single_instance", false);
-
+        if (get("import_3mf_as_project").empty())
+            set_bool("import_3mf_as_project", true);
 #ifdef SUPPORT_REMEMBER_OUTPUT_PATH
         if (get("remember_output_path").empty())
             set_bool("remember_output_path", true);
@@ -169,13 +170,30 @@ void AppConfig::set_defaults()
     if (get("reverse_mouse_wheel_zoom").empty())
         set_bool("reverse_mouse_wheel_zoom", false);
 #endif
+    if (get("enable_append_color_by_sync_ams").empty())
+        set_bool("enable_append_color_by_sync_ams", true);
+    if (get("enable_merge_color_by_sync_ams").empty())
+        set_bool("enable_merge_color_by_sync_ams", false);
+    if (get("ams_sync_match_full_use_color_dist").empty())
+        set_bool("ams_sync_match_full_use_color_dist", false);
+    if (get("enable_sidebar_resizable").empty())
+        set_bool("enable_sidebar_resizable", true);
+    if (get("enable_sidebar_floatable").empty())
+        set_bool("enable_sidebar_floatable", false);
+
+    if (get("export_sources_full_pathnames").empty())
+        set_bool("export_sources_full_pathnames", false);
 
     if (get("zoom_to_mouse").empty())
         set_bool("zoom_to_mouse", false);
     if (get("show_shells_in_preview").empty())
         set_bool("show_shells_in_preview", true);
+    if (get("enable_text_styles").empty())
+        set_bool("enable_text_styles", false);
     if (get("enable_lod").empty())
         set_bool("enable_lod", true);
+    if (get("gamma_correct_in_import_obj").empty())
+        set_bool("gamma_correct_in_import_obj", false);
     if (get("enable_opengl_multi_instance").empty())
         set_bool("enable_opengl_multi_instance", true);
     if (get("import_single_svg_and_split").empty())
@@ -184,13 +202,33 @@ void AppConfig::set_defaults()
         set_bool("user_bed_type", true);
     if (get("grabber_size_factor").empty())
         set("grabber_size_factor", "1.0");
+    if (get("cancel_glmultidraw").empty())
+        set_bool("cancel_glmultidraw", false);
 //#ifdef SUPPORT_SHOW_HINTS
     if (get("show_hints").empty())
-        set_bool("show_hints", true);
+        set_bool("show_hints", false);
 //#endif
+    if (get("support_backup_fonts").empty())
+        set_bool("support_backup_fonts", true);
+    if (get("custom_back_font_name").empty())
+        set("custom_back_font_name", "");
     if (get("enable_multi_machine").empty())
         set_bool("enable_multi_machine", false);
 
+    if (get("prefer_to_use_dgpu").empty())
+        set_bool("prefer_to_use_dgpu", false);
+
+    if (get("msaa_type").empty())
+        set("msaa_type", "X4");
+
+    if (get("enable_advanced_antialiasing").empty())
+        set_bool("enable_advanced_antialiasing", false);
+
+    if (get("gizmo_keep_screen_size").empty())
+        set_bool("gizmo_keep_screen_size", true);
+
+    if (get("show_3d_navigator").empty())
+        set_bool("show_3d_navigator", true);
 
 #ifdef _WIN32
 
@@ -254,13 +292,25 @@ void AppConfig::set_defaults()
     if (get("show_daily_tips").empty()) {
         set_bool("show_daily_tips", true);
     }
-    //true is auto calculate
-    if (get("auto_calculate").empty()) {
-        set_bool("auto_calculate", true);
+
+    if (get("auto_calculate_flush").empty()){
+        set("auto_calculate_flush","all");
     }
 
-    if (get("auto_calculate_when_filament_change").empty()){
-        set_bool("auto_calculate_when_filament_change", true);
+    if (get("enable_high_low_temp_mixed_printing").empty()){
+        set_bool("enable_high_low_temp_mixed_printing", false);
+    }
+
+    if (get("ignore_ext_filament_in_filament_map").empty()){
+        set_bool("ignore_ext_filament_in_filament_map", false);
+    }
+
+    if (get("pop_up_filament_map_dialog").empty()){
+        set_bool("pop_up_filament_map_dialog", false);
+    }
+
+    if (get("prefered_filament_map_mode").empty()){
+        set("prefered_filament_map_mode",ConfigOptionEnum<FilamentMapMode>::get_enum_names()[FilamentMapMode::fmmAutoForFlush]);
     }
 
     if (get("show_home_page").empty()) {
@@ -277,6 +327,10 @@ void AppConfig::set_defaults()
 
     if (get("units").empty()) {
          set("units", "0");
+    }
+
+    if (get("auto_transfer_when_switch_preset").empty()) {
+        set("auto_transfer_when_switch_preset", "true");
     }
 
     if (get("sync_user_preset").empty()) {
@@ -387,6 +441,12 @@ void AppConfig::set_defaults()
     if (get("is_split_compound").empty()) {
         set_bool("is_split_compound", false);
     }
+    if (get("play_slicing_video").empty()) {
+        set_bool("play_slicing_video", true);
+    }
+    if (get("play_tpu_printing_video").empty()) {
+        set_bool("play_tpu_printing_video", true);
+    }
 
     // Remove legacy window positions/sizes
     erase("app", "main_frame_maximized");
@@ -458,23 +518,33 @@ std::string AppConfig::load()
     std::string error_message;
 
     try {
-        ifs.open(AppConfig::loading_path());
-
+        auto path = AppConfig::loading_path();
+        ifs.open(path);
+        if (!ifs.is_open()) {
+            BOOST_LOG_TRIVIAL(info) << "AppConfig::load() open fail:" << AppConfig::loading_path();
+            return "Line break format may be incorrect.";
+        }
 #ifdef WIN32
         std::stringstream input_stream;
         input_stream << ifs.rdbuf();
         std::string total_string = input_stream.str();
-        size_t last_pos = total_string.find_last_of('}');
-        std::string left_string = total_string.substr(0, last_pos+1);
-        //skip the "\n"
-        std::string right_string = total_string.substr(last_pos+2);
+        if (total_string.empty()) {
+            BOOST_LOG_TRIVIAL(info) << "AppConfig::load() read fail:" << AppConfig::loading_path();
+            return "read fail.";
+        } else {
+            size_t      last_pos    = total_string.find_last_of('}');
+            std::string left_string = total_string.substr(0, last_pos + 1);
+            // skip the "\n"
+            std::string right_string = total_string.substr(last_pos + 2);
 
-        std::string md5_str = appconfig_md5_hash_line({left_string.data()});
-        // Verify the checksum of the config file without taking just for debugging purpose.
-        if (md5_str != right_string)
-            BOOST_LOG_TRIVIAL(info) << "The configuration file " << AppConfig::loading_path() <<
-            " has a wrong MD5 checksum or the checksum is missing. This may indicate a file corruption or a harmless user edit.";
-        j = json::parse(left_string);
+            std::string md5_str = appconfig_md5_hash_line({left_string.data()});
+            // Verify the checksum of the config file without taking just for debugging purpose.
+            if (md5_str != right_string) {
+                BOOST_LOG_TRIVIAL(info) << "The configuration file " << AppConfig::loading_path()
+                                        << " has a wrong MD5 checksum or the checksum is missing. This may indicate a file corruption or a harmless user edit.";
+            }
+            j = json::parse(left_string);
+        }
 #else
         ifs >> j;
 #endif
@@ -574,6 +644,10 @@ std::string AppConfig::load()
                         for (auto cali_it = calis_j["presets"].begin(); cali_it != calis_j["presets"].end(); cali_it++) {
                             CaliPresetInfo preset_info;
                             preset_info.tray_id     = cali_it.value()["tray_id"].get<int>();
+                            if (cali_it.value().contains("extruder_id"))
+                                preset_info.extruder_id = cali_it.value()["extruder_id"].get<int>();
+                            if (cali_it.value().contains("nozzle_volume_type"))
+                                preset_info.nozzle_volume_type  = NozzleVolumeType(cali_it.value()["nozzle_volume_type"].get<int>());
                             preset_info.nozzle_diameter = cali_it.value()["nozzle_diameter"].get<float>();
                             preset_info.filament_id = cali_it.value()["filament_id"].get<std::string>();
                             preset_info.setting_id  = cali_it.value()["setting_id"].get<std::string>();
@@ -596,12 +670,15 @@ std::string AppConfig::load()
                             m_filament_presets = iter.value().get<std::vector<std::string>>();
                         } else if (iter.key() == "filament_colors") {
                             m_filament_colors = iter.value().get<std::vector<std::string>>();
-                        }
-                        else {
+                        } else if(iter.key() == "filament_multi_colors") {
+                           m_filament_multi_colors = iter.value().get<std::vector<std::string>>();
+                        } else if(iter.key() == "filament_color_types") {
+                           m_filament_color_types = iter.value().get<std::vector<std::string>>();
+                        } else {
                             if (iter.value().is_string())
                                 m_storage[it.key()][iter.key()] = iter.value().get<std::string>();
                             else {
-                                BOOST_LOG_TRIVIAL(trace) << "load config warning...";
+                                BOOST_LOG_TRIVIAL(warning) << "load config warning...";
                             }
                         }
                     }
@@ -681,6 +758,13 @@ void AppConfig::save()
     for (const auto &filament_color : m_filament_colors) {
         j["app"]["filament_colors"].push_back(filament_color);
     }
+    for (const auto &filament_multi_color : m_filament_multi_colors) {
+       j["app"]["filament_multi_colors"].push_back(filament_multi_color);
+    }
+
+    for (const auto &filament_color_type : m_filament_color_types) {
+       j["app"]["filament_color_types"].push_back(filament_color_type);
+    }
 
     for (const auto &cali_info : m_printer_cali_infos) {
         json cali_json;
@@ -691,6 +775,8 @@ void AppConfig::save()
         for (auto filament_preset : cali_info.selected_presets) {
             json preset_json;
             preset_json["tray_id"] = filament_preset.tray_id;
+            preset_json["extruder_id"]      = filament_preset.extruder_id;
+            preset_json["nozzle_volume_type"]  = int(filament_preset.nozzle_volume_type);
             preset_json["nozzle_diameter"]  = filament_preset.nozzle_diameter;
             preset_json["filament_id"]      = filament_preset.filament_id;
             preset_json["setting_id"]       = filament_preset.setting_id;
@@ -714,7 +800,7 @@ void AppConfig::save()
         } else if (category.first == "presets") {
             json j_filament_array;
             for(const auto& kvp : category.second) {
-                if (boost::starts_with(kvp.first, "filament") && kvp.first != "filament_colors") {
+                if (boost::starts_with(kvp.first, "filament") && kvp.first != "filament_colors" && kvp.first != "filament_multi_colors" && kvp.first != "filament_color_types") {
                     j_filament_array.push_back(kvp.second);
                 } else {
                     j[category.first][kvp.first] = kvp.second;
@@ -1083,7 +1169,8 @@ void AppConfig::set_recent_projects(const std::vector<std::string>& recent_proje
     for (unsigned int i = 0; i < (unsigned int)recent_projects.size(); ++i)
     {
         auto n = std::to_string(i + 1);
-        if (n.length() == 1) n = "0" + n;
+        if (n.length() == 1) n = "00" + n;
+        else if (n.length() == 2) n = "0" + n;
         it->second[n] = recent_projects[i];
     }
 }
@@ -1190,11 +1277,11 @@ std::string AppConfig::get_region()
     std::string sel = get("iot_environment");
     std::string region;
     if (sel == ENV_DEV_HOST)
-        region = "ENV_CN_DEV";
+        region = "NEW_ENV_DEV_HOST";
     else if (sel == ENV_QAT_HOST)
-        region = "ENV_CN_QA";
+        region = "NEW_ENV_QAT_HOST";
     else if (sel == ENV_PRE_HOST)
-        region = "ENV_CN_PRE";
+        region = "NEW_ENV_PRE_HOST";
     if (region.empty())
         return this->get("region");
     return region;
@@ -1264,6 +1351,32 @@ std::vector<std::string> AppConfig::get_custom_color_from_config()
         }
     }
     return colors;
+}
+
+void AppConfig::save_nozzle_volume_types_to_config(const std::string& printer_name, const std::string& nozzle_volume_types)
+{
+    if (!has_section("nozzle_volume_types")) {
+        std::map<std::string, std::string> data;
+        data[printer_name] = nozzle_volume_types;
+        set_section("nozzle_volume_types", data);
+    } else {
+        auto data        = get_section("nozzle_volume_types");
+        auto data_modify = const_cast<std::map<std::string, std::string>&>(data);
+        data_modify[printer_name] = nozzle_volume_types;
+        set_section("nozzle_volume_types", data_modify);
+    }
+}
+
+std::string AppConfig::get_nozzle_volume_types_from_config(const std::string& printer_name)
+{
+    std::string nozzle_volume_types;
+    if (has_section("nozzle_volume_types")) {
+        auto data        = get_section("nozzle_volume_types");
+        if (data.find(printer_name) != data.end())
+            nozzle_volume_types = data[printer_name];
+    }
+
+    return nozzle_volume_types;
 }
 
 void AppConfig::reset_selections()

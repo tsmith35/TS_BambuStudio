@@ -69,7 +69,18 @@ struct Perimeter
 struct SeamCandidate
 {
     SeamCandidate(const Vec3f &pos, Perimeter &perimeter, float local_ccw_angle, EnforcedBlockedSeamPoint type)
-        : position(pos), perimeter(perimeter), visibility(0.0f), overhang(0.0f), embedded_distance(0.0f), local_ccw_angle(local_ccw_angle), type(type), central_enforcer(false)
+        : position(pos)
+        , perimeter(perimeter)
+        , visibility(0.0f)
+        , overhang(0.0f)
+        , embedded_distance(0.0f)
+        , local_ccw_angle(local_ccw_angle)
+        , type(type)
+        , central_enforcer(false)
+        , enable_scarf_seam(false)
+        , is_grouped(false)
+        , extra_overhang_point(0.0f)
+        , overhang_degree(0.0f)
     {}
     const Vec3f position;
     // pointer to Perimeter loop of this point. It is shared across all points of the loop
@@ -82,6 +93,10 @@ struct SeamCandidate
     float                    local_ccw_angle;
     EnforcedBlockedSeamPoint type;
     bool                     central_enforcer; // marks this candidate as central point of enforced segment on the perimeter - important for alignment
+    bool                     enable_scarf_seam; // marks this candidate as a candidate for scarf seam
+    bool                     is_grouped;
+    float                    extra_overhang_point;
+    float                    overhang_degree;
 };
 
 struct SeamCandidateCoordinateFunctor
@@ -131,6 +146,8 @@ public:
 
     // For long polygon sides, if they are close to the custom seam drawings, they are oversampled with this step size
     static constexpr float enforcer_oversampling_distance = 0.2f;
+    static constexpr float end_point_oversampling_threshold = 4.0f;
+    static constexpr float end_point_oversampling_distance = 1.5f;
 
     // When searching for seam clusters for alignment:
     // following value describes, how much worse score can point have and still be picked into seam cluster instead of original seam point on the same layer
@@ -147,7 +164,7 @@ public:
 
     void init(const Print &print, std::function<void(void)> throw_if_canceled_func);
 
-    void place_seam(const Layer *layer, ExtrusionLoop &loop, bool external_first, const Point &last_pos) const;
+    void place_seam(const Layer *layer, ExtrusionLoop &loop, bool external_first, const Point &last_pos, bool &satisfy_angle_threshold) const;
 
 private:
     void gather_seam_candidates(const PrintObject *po, const SeamPlacerImpl::GlobalModelInfo &global_model_info, const SeamPosition configured_seam_preference);
@@ -160,6 +177,8 @@ private:
                                                                      const size_t                                        layer_idx,
                                                                      const float                                         max_distance,
                                                                      const SeamPlacerImpl::SeamComparator &              comparator) const;
+    std::vector<std::pair<size_t, size_t>>   gather_all_seams_of_object(const std::vector<PrintObjectSeamData::LayerSeams> &layers);
+    void filter_scarf_seam_switch_by_angle(const float &angle, std::vector<PrintObjectSeamData::LayerSeams> &layers);
 };
 
 } // namespace Slic3r

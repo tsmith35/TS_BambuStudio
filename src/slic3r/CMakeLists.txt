@@ -8,6 +8,8 @@ set(SLIC3R_GUI_SOURCES
     pchheader.hpp
     GUI/Printer/PrinterFileSystem.cpp
     GUI/Printer/PrinterFileSystem.h
+    GUI/Widgets/AnimaController.hpp
+    GUI/Widgets/AnimaController.cpp
     GUI/Widgets/AxisCtrlButton.cpp
     GUI/Widgets/AxisCtrlButton.hpp
     GUI/Widgets/Button.cpp
@@ -38,6 +40,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/Widgets/ScrolledWindow.hpp
     GUI/Widgets/StaticBox.cpp
     GUI/Widgets/StaticBox.hpp
+    GUI/Widgets/StaticGroup.cpp
+    GUI/Widgets/StaticGroup.hpp
     GUI/Widgets/ImageSwitchButton.cpp
     GUI/Widgets/ImageSwitchButton.hpp
     GUI/Widgets/SwitchButton.cpp
@@ -58,6 +62,10 @@ set(SLIC3R_GUI_SOURCES
     GUI/Widgets/TempInput.hpp
     GUI/Widgets/AMSControl.cpp
     GUI/Widgets/AMSControl.hpp
+    GUI/Widgets/AMSItem.cpp
+    GUI/Widgets/AMSItem.hpp
+    GUI/Widgets/FilamentLoad.cpp
+    GUI/Widgets/FilamentLoad.hpp
     GUI/Widgets/FanControl.cpp
     GUI/Widgets/FanControl.hpp
     GUI/Widgets/Scrollbar.cpp
@@ -84,6 +92,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/Auxiliary.hpp
     GUI/DailyTips.cpp
     GUI/DailyTips.hpp
+    GUI/EncodedFilament.hpp
+    GUI/EncodedFilament.cpp
     GUI/Project.cpp
     GUI/Project.hpp
     GUI/BackgroundSlicingProcess.cpp
@@ -101,6 +111,7 @@ set(SLIC3R_GUI_SOURCES
     GUI/GLShader.hpp
     GUI/GLCanvas3D.hpp
     GUI/GLCanvas3D.cpp
+    GUI/GLEnums.hpp
     GUI/OpenGLManager.hpp
     GUI/OpenGLManager.cpp
     GUI/Selection.hpp
@@ -135,6 +146,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/Gizmos/GLGizmoSimplify.hpp
     GUI/Gizmos/GLGizmoMmuSegmentation.cpp
     GUI/Gizmos/GLGizmoMmuSegmentation.hpp
+    GUI/Gizmos/GLGizmoFuzzySkin.cpp
+    GUI/Gizmos/GLGizmoFuzzySkin.hpp
     GUI/Gizmos/GLGizmoFaceDetector.cpp
     GUI/Gizmos/GLGizmoFaceDetector.hpp
     GUI/Gizmos/GLGizmoMeasure.cpp
@@ -167,6 +180,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/IMToolbar.cpp
     GUI/GCodeViewer.hpp
     GUI/GCodeViewer.cpp
+    GUI/ImageDPIFrame.cpp
+    GUI/ImageDPIFrame.hpp
     GUI/Preferences.cpp
     GUI/Preferences.hpp
     GUI/AMSSetting.cpp
@@ -277,6 +292,14 @@ set(SLIC3R_GUI_SOURCES
     GUI/ConfigManipulation.hpp
     GUI/Field.cpp
     GUI/Field.hpp
+    GUI/DragDropPanel.cpp
+    GUI/DragDropPanel.hpp
+    GUI/CapsuleButton.cpp
+    GUI/CapsuleButton.hpp
+    GUI/FilamentMapPanel.cpp
+    GUI/FilamentMapPanel.hpp
+    GUI/FilamentMapDialog.cpp
+    GUI/FilamentMapDialog.hpp
     GUI/OptionsGroup.cpp
     GUI/OptionsGroup.hpp
     GUI/OG_CustomCtrl.cpp
@@ -295,6 +318,10 @@ set(SLIC3R_GUI_SOURCES
     GUI/wxExtensions.hpp
     GUI/ObjColorDialog.cpp
     GUI/ObjColorDialog.hpp
+    GUI/FilamentPickerDialog.cpp
+    GUI/FilamentPickerDialog.hpp
+    GUI/FilamentBitmapUtils.cpp
+    GUI/FilamentBitmapUtils.hpp
     GUI/WipeTowerDialog.cpp
     GUI/WipeTowerDialog.hpp
     GUI/RemovableDriveManager.cpp
@@ -303,8 +330,14 @@ set(SLIC3R_GUI_SOURCES
     GUI/SendSystemInfoDialog.hpp
     GUI/StepMeshDialog.cpp
     GUI/StepMeshDialog.hpp
+    GUI/BaseTransparentDPIFrame.cpp
+    GUI/BaseTransparentDPIFrame.hpp
+    GUI/SyncAmsInfoDialog.cpp
+    GUI/SyncAmsInfoDialog.hpp
     GUI/SurfaceDrag.cpp
     GUI/SurfaceDrag.hpp
+    GUI/TextLines.cpp
+    GUI/TextLines.hpp
     GUI/PlateSettingsDialog.cpp
     GUI/PlateSettingsDialog.hpp
     GUI/ImGuiWrapper.hpp
@@ -349,6 +382,10 @@ set(SLIC3R_GUI_SOURCES
     GUI/Jobs/UpgradeNetworkJob.cpp
     GUI/Jobs/ArrangeJob.hpp
     GUI/Jobs/ArrangeJob.cpp
+    GUI/Jobs/CreateFontNameImageJob.cpp
+    GUI/Jobs/CreateFontNameImageJob.hpp
+    GUI/Jobs/CreateFontStyleImagesJob.cpp
+    GUI/Jobs/CreateFontStyleImagesJob.hpp
     GUI/Jobs/OrientJob.hpp
     GUI/Jobs/OrientJob.cpp
     GUI/Jobs/RotoptimizeJob.hpp
@@ -374,6 +411,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/BBLStatusBar.cpp
     GUI/BBLStatusBarSend.hpp
     GUI/BBLStatusBarSend.cpp
+    GUI/BBLStatusBarPrint.hpp
+    GUI/BBLStatusBarPrint.cpp
     GUI/BBLStatusBarBind.hpp
     GUI/BBLStatusBarBind.cpp
     GUI/Mouse3DController.cpp
@@ -395,10 +434,14 @@ set(SLIC3R_GUI_SOURCES
     GUI/InstanceCheck.hpp
     GUI/Search.cpp
     GUI/Search.hpp
+    GUI/FilamentGroupPopup.hpp
+    GUI/FilamentGroupPopup.cpp
     GUI/NotificationManager.cpp
     GUI/NotificationManager.hpp
     GUI/UnsavedChangesDialog.cpp
     GUI/UnsavedChangesDialog.hpp
+    GUI/UserPresetsDialog.cpp
+    GUI/UserPresetsDialog.hpp
     GUI/ExtraRenderers.cpp
     GUI/ExtraRenderers.hpp
     GUI/ProjectDirtyStateManager.hpp
@@ -417,10 +460,19 @@ set(SLIC3R_GUI_SOURCES
     GUI/BonjourDialog.hpp
     GUI/BindDialog.cpp
     GUI/BindDialog.hpp
+    GUI/PartSkipCommon.hpp
+    GUI/PartSkipDialog.cpp
+    GUI/PartSkipDialog.hpp
+    GUI/SkipPartCanvas.cpp
+    GUI/SkipPartCanvas.hpp
     GUI/ModelMall.hpp
     GUI/ModelMall.cpp
     GUI/SelectMachine.hpp
     GUI/SelectMachine.cpp
+    GUI/PrePrintChecker.hpp
+    GUI/PrePrintChecker.cpp
+    GUI/SelectMachinePop.hpp
+    GUI/SelectMachinePop.cpp
     GUI/SendToPrinter.hpp
     GUI/SendToPrinter.cpp
     GUI/AmsMappingPopup.hpp
@@ -475,12 +527,18 @@ set(SLIC3R_GUI_SOURCES
     GUI/SendMultiMachinePage.cpp
     GUI/TaskManager.cpp
     GUI/TaskManager.hpp
+    Utils/WxFontUtils.cpp
+    Utils/WxFontUtils.hpp
+    Utils/EmbossStyleManager.cpp
+    Utils/EmbossStyleManager.hpp
     Utils/Http.cpp
     Utils/Http.hpp
     Utils/FixModelByWin10.cpp
     Utils/FixModelByWin10.hpp
     Utils/Bonjour.cpp
     Utils/Bonjour.hpp
+    Utils/BBLUtil.hpp
+    Utils/BBLUtil.cpp
     Utils/FileHelp.cpp
     Utils/FileHelp.hpp
     Utils/PresetUpdater.cpp
@@ -508,6 +566,8 @@ set(SLIC3R_GUI_SOURCES
     Utils/NetworkAgent.hpp
     Utils/MKS.hpp
     Utils/MKS.cpp
+    Utils/CpuMemory.cpp
+    Utils/CpuMemory.hpp
     Utils/Duet.cpp
     Utils/Duet.hpp
     Utils/FlashAir.cpp
@@ -523,7 +583,11 @@ set(SLIC3R_GUI_SOURCES
 	Utils/FontConfigHelp.hpp
 	Utils/FontUtils.cpp
 	Utils/FontUtils.hpp
+    Utils/WxFontUtils.hpp
+    Utils/WxFontUtils.cpp
 )
+
+add_subdirectory(GUI/DeviceTab)
 
 if (WIN32)
     list(APPEND SLIC3R_GUI_SOURCES
@@ -577,8 +641,8 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SLIC3R_GUI_SOURCES})
 
 encoding_check(libslic3r_gui)
 
-target_link_libraries(libslic3r_gui libslic3r cereal imgui minilzo GLEW::GLEW OpenGL::GL hidapi ${wxWidgets_LIBRARIES} glfw libcurl OpenSSL::SSL OpenSSL::Crypto)
-#target_link_libraries(libslic3r_gui libslic3r cereal imgui minilzo GLEW::GLEW OpenGL::GL hidapi libcurl OpenSSL::SSL OpenSSL::Crypto ${wxWidgets_LIBRARIES} glfw)
+target_link_libraries(libslic3r_gui libslic3r cereal imgui imguizmo minilzo GLEW::GLEW OpenGL::GL hidapi ${wxWidgets_LIBRARIES} glfw libcurl OpenSSL::SSL OpenSSL::Crypto)
+#target_link_libraries(libslic3r_gui libslic3r cereal imgui imguizmo minilzo GLEW::GLEW OpenGL::GL hidapi libcurl OpenSSL::SSL OpenSSL::Crypto ${wxWidgets_LIBRARIES} glfw)
 
 if (MSVC)
     target_link_libraries(libslic3r_gui Setupapi.lib)

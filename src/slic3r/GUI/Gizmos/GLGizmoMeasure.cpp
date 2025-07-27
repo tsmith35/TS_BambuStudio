@@ -3,6 +3,7 @@
 #include "slic3r/GUI/GUI_App.hpp"
 #include "slic3r/GUI/Plater.hpp"
 #include "slic3r/GUI/Gizmos/GizmoObjectManipulation.hpp"
+#include "slic3r/GUI/OpenGLManager.hpp"
 #include "slic3r/Utils/UndoRedo.hpp"
 
 #include "libslic3r/PresetBundle.hpp"
@@ -175,8 +176,8 @@ void TransformHelper::update(const std::array<int, 4> &viewport)
 
 TransformHelper::Cache TransformHelper::s_cache = { { 0, 0, 0, 0 }, Matrix4d::Identity(), Transform3d::Identity() };
 
-GLGizmoMeasure::GLGizmoMeasure(GLCanvas3D& parent, const std::string& icon_filename, unsigned int sprite_id)
-: GLGizmoBase(parent, icon_filename, sprite_id)
+GLGizmoMeasure::GLGizmoMeasure(GLCanvas3D& parent, unsigned int sprite_id)
+: GLGizmoBase(parent, sprite_id)
 {
     auto sphere_geometry = smooth_sphere(16, 7.5f);
     m_sphere             = std::make_shared<GLModel>();
@@ -441,6 +442,11 @@ bool GLGizmoMeasure::gizmo_event(SLAGizmoEventType action, const Vec2d& mouse_po
     return true;
 }
 
+std::string GLGizmoMeasure::get_icon_filename(bool is_dark_mode) const
+{
+    return is_dark_mode ? "toolbar_measure_dark.svg" : "toolbar_measure.svg";
+}
+
 bool GLGizmoMeasure::on_init()
 {
     m_shortcut_key = WXK_CONTROL_U;
@@ -563,6 +569,8 @@ void GLGizmoMeasure::on_render()
     update_if_needed();
 
     const Camera& camera = wxGetApp().plater()->get_camera();
+    const auto& view_matrix = camera.get_view_matrix();
+    const auto& projection_matrix = camera.get_projection_matrix();
     const float inv_zoom = (float)camera.get_inv_zoom();
     bool mouse_on_gripper = false;
     bool mouse_on_object =false;
@@ -676,8 +684,10 @@ void GLGizmoMeasure::on_render()
             }
             if (m_measure_mode == EMeasureMode::ONLY_ASSEMBLY) {
                 if (m_assembly_mode == AssemblyMode::FACE_FACE) {
-                    if (curr_feature->get_type() != Measure::SurfaceFeatureType::Plane) {
-                        curr_feature.reset();
+                    if (curr_feature.has_value()) {
+                        if (curr_feature->get_type() != Measure::SurfaceFeatureType::Plane) {
+                            curr_feature.reset();
+                        }
                     }
                 } else if (m_assembly_mode == AssemblyMode::POINT_POINT) {
                     if (!(curr_feature->get_type() == Measure::SurfaceFeatureType::Point ||
@@ -692,10 +702,10 @@ void GLGizmoMeasure::on_render()
                 reset_gripper_pick(GripperType::UNDEFINE, true);
 
                 m_curr_feature = curr_feature;
-                m_curr_feature->volume     = m_last_hit_volume;
-                m_curr_feature->world_tran = m_mesh_raycaster_map[m_last_hit_volume]->world_tran.get_matrix();
                 if (!m_curr_feature.has_value())
                     return;
+                m_curr_feature->volume     = m_last_hit_volume;
+                m_curr_feature->world_tran = m_mesh_raycaster_map[m_last_hit_volume]->world_tran.get_matrix();
 
                 switch (m_curr_feature->get_type()) {
                 default: { assert(false); break; }
@@ -811,7 +821,7 @@ void GLGizmoMeasure::on_render()
     glsafe(::glEnable(GL_DEPTH_TEST));
     glDisable(GL_BLEND);
     auto render_feature =
-        [this](const Measure::SurfaceFeature &feature, const std::vector<ColorRGBA> &colors,
+        [this, view_matrix, projection_matrix](const Measure::SurfaceFeature &feature, const std::vector<ColorRGBA> &colors,
         float inv_zoom, bool hover, bool update_raycasters_transform,int featura_index = -1) {
             switch (feature.get_type())
             {
@@ -820,7 +830,7 @@ void GLGizmoMeasure::on_render()
             {
                 const Transform3d feature_matrix =  Geometry::translation_transform(feature.get_point()) * Geometry::scale_transform(inv_zoom);
                 Geometry::Transformation tran(feature_matrix);
-                render_glmodel(*m_sphere, colors.front().get_data(), tran.get_matrix(), false, hover ? 0.5f : 0.25f);
+                render_glmodel(*m_sphere, colors.front().get_data(), view_matrix * tran.get_matrix(), projection_matrix, false, hover ? 0.5f : 0.25f);
                 if (update_raycasters_transform) {
                     auto it = m_gripper_id_raycast_map.find(GripperType::POINT);
                     if (it != m_gripper_id_raycast_map.end() && it->second != nullptr)
@@ -837,20 +847,20 @@ void GLGizmoMeasure::on_render()
                 Geometry::Transformation tran(circle_matrix);
                 if (featura_index == -1) {
                     init_circle_glmodel(GripperType::CIRCLE, feature, m_curr_circle, inv_zoom);
-                    render_glmodel(*m_curr_circle.circle, colors.front().get_data(), tran.get_matrix(), false, hover ? 0.5f : 0.25f);
+                    render_glmodel(*m_curr_circle.circle, colors.front().get_data(), view_matrix * tran.get_matrix(), projection_matrix, false, hover ? 0.5f : 0.25f);
                 }
                 // render plane feature1 or feature2
                 if (featura_index == 0) { // feature1
                     init_circle_glmodel(GripperType::CIRCLE_1, feature, m_feature_circle_first, inv_zoom);
-                    render_glmodel(*m_feature_circle_first.circle, colors.front().get_data(), tran.get_matrix(), false, hover ? 0.5f : 0.25f);
+                    render_glmodel(*m_feature_circle_first.circle, colors.front().get_data(), view_matrix * tran.get_matrix(), projection_matrix, false, hover ? 0.5f : 0.25f);
                 } else if (featura_index == 1) { // feature2
                     init_circle_glmodel(GripperType::CIRCLE_2, feature, m_feature_circle_second, inv_zoom);
-                    render_glmodel(*m_feature_circle_second.circle, colors.front().get_data(), tran.get_matrix(), false, hover ? 0.5f : 0.25f);
+                    render_glmodel(*m_feature_circle_second.circle, colors.front().get_data(), view_matrix * tran.get_matrix(), projection_matrix, false, hover ? 0.5f : 0.25f);
                 }
                 // render center
                 if (colors.size() > 1) {
                     const Transform3d center_matrix = Geometry::translation_transform(center) * Geometry::scale_transform(inv_zoom);
-                    render_glmodel(*m_sphere, colors.back().get_data(), center_matrix, false, hover ? 0.5f : 0.25f);
+                    render_glmodel(*m_sphere, colors.back().get_data(), view_matrix * center_matrix, projection_matrix, false, hover ? 0.5f : 0.25f);
 
                     Geometry::Transformation tran(center_matrix);
                     auto it = m_gripper_id_raycast_map.find(GripperType::POINT);
@@ -868,7 +878,7 @@ void GLGizmoMeasure::on_render()
                     Geometry::scale_transform({ (double)inv_zoom, (double)inv_zoom, (to - from).norm() });
 
                 Geometry::Transformation tran(edge_matrix);
-                render_glmodel(*m_cylinder, colors.front().get_data(), tran.get_matrix(), false, hover ? 0.5f : 0.25f);
+                render_glmodel(*m_cylinder, colors.front().get_data(), view_matrix * tran.get_matrix(), projection_matrix, false, hover ? 0.5f : 0.25f);
                 if (update_raycasters_transform) {
                     auto it = m_gripper_id_raycast_map.find(GripperType::EDGE);
                     if (it != m_gripper_id_raycast_map.end() && it->second != nullptr){
@@ -881,7 +891,7 @@ void GLGizmoMeasure::on_render()
                     if (extra.has_value()) {
                         const Transform3d point_matrix = Geometry::translation_transform(*extra) * Geometry::scale_transform(inv_zoom);
                         Geometry::Transformation tran(point_matrix);
-                        render_glmodel(*m_sphere, colors.back().get_data(), tran.get_matrix(), false, hover ? 0.5f : 0.25f);
+                        render_glmodel(*m_sphere, colors.back().get_data(), view_matrix * tran.get_matrix(), projection_matrix, false, hover ? 0.5f : 0.25f);
 
                         auto it = m_gripper_id_raycast_map.find(GripperType::POINT);
                         if (it != m_gripper_id_raycast_map.end() && it->second != nullptr) {
@@ -893,16 +903,16 @@ void GLGizmoMeasure::on_render()
             }
             case Measure::SurfaceFeatureType::Plane: {
                 if (featura_index == -1) {
-                    render_glmodel(*m_curr_plane.plane, colors.back().get_data(), feature.world_tran, false, hover ? 0.5f : 0.25f);
+                    render_glmodel(*m_curr_plane.plane, colors.back().get_data(), view_matrix * feature.world_tran, projection_matrix, false, hover ? 0.5f : 0.25f);
                     break;
                 }
                 //render plane feature1 or feature2
                 if (featura_index == 0) {//feature1
                     init_plane_glmodel(GripperType::PLANE_1, feature, m_feature_plane_first);
-                    render_glmodel(*m_feature_plane_first.plane, colors.back().get_data(), feature.world_tran, false, hover ? 0.5f : 0.25f);
+                    render_glmodel(*m_feature_plane_first.plane, colors.back().get_data(), view_matrix * feature.world_tran, projection_matrix, false, hover ? 0.5f : 0.25f);
                 } else if (featura_index == 1) {//feature2
                     init_plane_glmodel(GripperType::PLANE_2, feature, m_feature_plane_second);
-                    render_glmodel(*m_feature_plane_second.plane, colors.back().get_data(), feature.world_tran, false, hover ? 0.5f : 0.25f);
+                    render_glmodel(*m_feature_plane_second.plane, colors.back().get_data(), view_matrix * feature.world_tran, projection_matrix, false, hover ? 0.5f : 0.25f);
                 }
                 break;
             }
@@ -1050,7 +1060,7 @@ void GLGizmoMeasure::on_render()
             const ColorRGBA color = hover_selection_color();
 
             Geometry::Transformation tran(matrix);
-            render_glmodel(*m_sphere, color.get_data(), tran.get_matrix(), false, 0.5f);
+            render_glmodel(*m_sphere, color.get_data(), view_matrix * tran.get_matrix(), projection_matrix, false, 0.5f);
         }
     }
     render_dimensioning();
@@ -1116,7 +1126,7 @@ void GLGizmoMeasure::render_dimensioning()
     if (!m_selected_features.second.feature.has_value() && m_selected_features.first.feature->get_type() != Measure::SurfaceFeatureType::Circle)
         return;
 
-    GLShaderProgram* shader = wxGetApp().get_shader("flat");
+    auto shader = wxGetApp().get_shader("flat");
     if (shader == nullptr)
         return;
 
@@ -1152,13 +1162,13 @@ void GLGizmoMeasure::render_dimensioning()
 
 #if ENABLE_GL_CORE_PROFILE
         if (OpenGLManager::get_gl_info().is_core_profile()) {
-            shader->stop_using();
+            wxGetApp().unbind_shader(shader);
 
             shader = wxGetApp().get_shader("dashed_thick_lines");
             if (shader == nullptr)
                 return;
 
-            shader->start_using();
+            wxGetApp().bind_shader(shader);
             shader->set_uniform("projection_matrix", Transform3d::Identity());
             const std::array<int, 4>& viewport = camera.get_viewport();
             shader->set_uniform("viewport_size", Vec2d(double(viewport[2]), double(viewport[3])));
@@ -1167,40 +1177,41 @@ void GLGizmoMeasure::render_dimensioning()
         }
         else
 #endif // ENABLE_GL_CORE_PROFILE
-            glsafe(::glLineWidth(2.0f));
+        const auto& p_ogl_manager = wxGetApp().get_opengl_manager();
+        p_ogl_manager->set_line_width(2.0f);
         // stem
         shader->set_uniform("view_model_matrix", overlap ?
             ss_to_ndc_matrix * Geometry::translation_transform(v1ss_3) * q12ss * Geometry::translation_transform(-2.0 * TRIANGLE_HEIGHT * Vec3d::UnitX()) * Geometry::scale_transform({ v12ss_len + 4.0 * TRIANGLE_HEIGHT, 1.0f, 1.0f }) :
             ss_to_ndc_matrix * Geometry::translation_transform(v1ss_3) * q12ss * Geometry::scale_transform({ v12ss_len, 1.0f, 1.0f }));
         m_dimensioning.line.set_color(-1, color);
-        m_dimensioning.line.render();
+        m_dimensioning.line.render_geometry();
 
 #if ENABLE_GL_CORE_PROFILE
         if (OpenGLManager::get_gl_info().is_core_profile()) {
-            shader->stop_using();
+            wxGetApp().unbind_shader(shader);
 
             shader = wxGetApp().get_shader("flat");
             if (shader == nullptr)
                 return;
 
-            shader->start_using();
+            wxGetApp().bind_shader(shader);
         }
         else
 #endif // ENABLE_GL_CORE_PROFILE
-            glsafe(::glLineWidth(1.0f));
+            p_ogl_manager->set_line_width(1.0f);
 
         // arrow 1
         if (show_first_tri) {
             shader->set_uniform("view_model_matrix", overlap ?
                 ss_to_ndc_matrix * Geometry::translation_transform(v1ss_3) * q12ss :
                 ss_to_ndc_matrix * Geometry::translation_transform(v1ss_3) * q21ss);
-            m_dimensioning.triangle.render();
+            m_dimensioning.triangle.render_geometry();
         }
         // arrow 2
         shader->set_uniform("view_model_matrix", overlap ?
             ss_to_ndc_matrix * Geometry::translation_transform(v2ss_3) * q21ss :
             ss_to_ndc_matrix * Geometry::translation_transform(v2ss_3) * q12ss);
-        m_dimensioning.triangle.render();
+        m_dimensioning.triangle.render_geometry();
 
         const bool use_inches = wxGetApp().app_config->get("use_inches") == "1";
         const double curr_value = use_inches ? GizmoObjectManipulation::mm_to_in * distance : distance;
@@ -1356,7 +1367,7 @@ void GLGizmoMeasure::render_dimensioning()
                     shader->set_uniform("view_model_matrix", ss_to_ndc_matrix * Geometry::translation_transform({ pss.x(), pss.y(), 0.0 }) * q *
                         Geometry::scale_transform({ pv_projss_len, 1.0f, 1.0f }));
                     m_dimensioning.line.set_color(-1, ColorRGBA::LIGHT_GRAY().get_data());
-                    m_dimensioning.line.render();
+                    m_dimensioning.line.render_geometry();
                 }
             };
 
@@ -1409,13 +1420,13 @@ void GLGizmoMeasure::render_dimensioning()
         const Camera& camera = wxGetApp().plater()->get_camera();
 #if ENABLE_GL_CORE_PROFILE
         if (OpenGLManager::get_gl_info().is_core_profile()) {
-            shader->stop_using();
+            wxGetApp().unbind_shader();
 
             shader = wxGetApp().get_shader("dashed_thick_lines");
             if (shader == nullptr)
                 return;
 
-            shader->start_using();
+            wxGetApp().bind_shader(shader);
             shader->set_uniform("projection_matrix", Transform3d::Identity());
             const std::array<int, 4>& viewport = camera.get_viewport();
             shader->set_uniform("viewport_size", Vec2d(double(viewport[2]), double(viewport[3])));
@@ -1424,26 +1435,27 @@ void GLGizmoMeasure::render_dimensioning()
         }
         else
 #endif // ENABLE_GL_CORE_PROFILE
-          glsafe(::glLineWidth(2.0f));
+        const auto& p_ogl_manager = wxGetApp().get_opengl_manager();
+        p_ogl_manager->set_line_width(2.0f);
 
         // arc
         shader->set_uniform("projection_matrix", camera.get_projection_matrix());
         shader->set_uniform("view_model_matrix", camera.get_view_matrix() * Geometry::translation_transform(center));
-        m_dimensioning.arc.render();
+        m_dimensioning.arc.render_geometry();
 
 #if ENABLE_GL_CORE_PROFILE
         if (OpenGLManager::get_gl_info().is_core_profile()) {
-            shader->stop_using();
+            wxGetApp().unbind_shader();
 
             shader = wxGetApp().get_shader("flat");
             if (shader == nullptr)
                 return;
 
-            shader->start_using();
+            wxGetApp().bind_shader(shader);
         }
         else
 #endif // ENABLE_GL_CORE_PROFILE
-          glsafe(::glLineWidth(1.0f));
+          p_ogl_manager->set_line_width(1.0f);
 
         // arrows
         auto render_arrow = [this, shader, &camera, &normal, &center, &e1_unit, draw_radius, step, resolution](unsigned int endpoint_id) {
@@ -1455,7 +1467,7 @@ void GLGizmoMeasure::render_dimensioning()
             const Transform3d view_model_matrix = camera.get_view_matrix() * Geometry::translation_transform(position_model) *
                 qx * qz * Geometry::scale_transform(camera.get_inv_zoom());
             shader->set_uniform("view_model_matrix", view_model_matrix);
-            m_dimensioning.triangle.render();
+            m_dimensioning.triangle.render_geometry();
         };
 
         glsafe(::glDisable(GL_CULL_FACE));
@@ -1473,7 +1485,7 @@ void GLGizmoMeasure::render_dimensioning()
                 Eigen::Quaternion<double>::FromTwoVectors(Vec3d::UnitX(), Measure::edge_direction(e1.first, e1.second)) *
                 Geometry::scale_transform({ e11center_len, 1.0f, 1.0f }));
             m_dimensioning.line.set_color(-1, ColorRGBA::LIGHT_GRAY().get_data());
-            m_dimensioning.line.render();
+            m_dimensioning.line.render_geometry();
         }
 
         // edge 2 extension
@@ -1484,7 +1496,7 @@ void GLGizmoMeasure::render_dimensioning()
                 Eigen::Quaternion<double>::FromTwoVectors(Vec3d::UnitX(), Measure::edge_direction(e2.first, e2.second)) *
                 Geometry::scale_transform({ (coplanar && radius > 0.0) ? e21center_len : draw_radius, 1.0f, 1.0f }));
             m_dimensioning.line.set_color(-1, ColorRGBA::LIGHT_GRAY().get_data());
-            m_dimensioning.line.render();
+            m_dimensioning.line.render_geometry();
         }
 
         // label
@@ -1550,7 +1562,7 @@ void GLGizmoMeasure::render_dimensioning()
             Measure::SurfaceFeature(Measure::SurfaceFeatureType::Edge, e2.first, e2.second), calc_radius);
     };
 
-    shader->start_using();
+    wxGetApp().bind_shader(shader);
 
     if (!m_dimensioning.line.is_initialized()) {
         GLModel::Geometry init_data;
@@ -1650,7 +1662,7 @@ void GLGizmoMeasure::render_dimensioning()
 
     glsafe(::glEnable(GL_DEPTH_TEST));
 
-    shader->stop_using();
+    wxGetApp().unbind_shader();
 }
 
 static void add_row_to_table(std::function<void(void)> col_1 = nullptr, std::function<void(void)> col_2 = nullptr)
@@ -1890,16 +1902,16 @@ void GLGizmoMeasure::show_distance_xyz_ui()
     if (m_measure_mode == EMeasureMode::ONLY_MEASURE) {
         m_imgui->text(_u8L("Measure"));
     }
-    auto add_measure_row_to_table = [this](const std::string &col_1, const ImVec4 &col_1_color, const std::string &col_2, const ImVec4 &col_2_color) {
+    auto add_measure_row_to_table = [this](const std::string &col_1, const ImVec4 &col_1_color, const std::string &col_2, const std::string &unit, const ImVec4 &col_2_color) {
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         m_imgui->text_colored(col_1_color, col_1);
         ImGui::TableSetColumnIndex(1);
-        m_imgui->text_colored(col_2_color, col_2);
+        m_imgui->text_colored(col_2_color, col_2 + unit);
         ImGui::TableSetColumnIndex(2);
         if (m_imgui->image_button(m_is_dark_mode ? ImGui::ClipboardBtnDarkIcon : ImGui::ClipboardBtnIcon, _L("Copy to clipboard"))) {
             wxTheClipboard->Open();
-            wxTheClipboard->SetData(new wxTextDataObject(wxString((col_1 + ": " + col_2).c_str(), wxConvUTF8)));
+            wxTheClipboard->SetData(new wxTextDataObject(wxString(col_2.c_str(), wxConvUTF8)));
             wxTheClipboard->Close();
         }
     };
@@ -1956,7 +1968,7 @@ void GLGizmoMeasure::show_distance_xyz_ui()
             if (measure.angle.has_value() && m_measure_mode == EMeasureMode::ONLY_MEASURE)
                 {
                 ImGui::PushID("ClipboardAngle");
-                add_measure_row_to_table(_u8L("Angle"), ImGuiWrapper::COL_BAMBU, format_double(Geometry::rad2deg(measure.angle->angle)) + "°",
+                add_measure_row_to_table(_u8L("Angle"), ImGuiWrapper::COL_BAMBU, format_double(Geometry::rad2deg(measure.angle->angle)),"°",
                                             ImGui::GetStyleColorVec4(ImGuiCol_Text));
                 ++measure_row_count;
                 ImGui::PopID();
@@ -1969,7 +1981,7 @@ void GLGizmoMeasure::show_distance_xyz_ui()
                 double distance = measure.distance_infinite->dist;
                 if (m_use_inches) distance = GizmoObjectManipulation::mm_to_in * distance;
                 ImGui::PushID("ClipboardDistanceInfinite");
-                add_measure_row_to_table(show_strict ? _u8L("Perpendicular distance") : _u8L("Distance"), ImGuiWrapper::COL_BAMBU, format_double(distance) + m_units,
+                add_measure_row_to_table(show_strict ? _u8L("Perpendicular distance") : _u8L("Distance"), ImGuiWrapper::COL_BAMBU, format_double(distance), m_units,
                                             ImGui::GetStyleColorVec4(ImGuiCol_Text));
                 ++measure_row_count;
                 ImGui::PopID();
@@ -1982,7 +1994,7 @@ void GLGizmoMeasure::show_distance_xyz_ui()
                 if (m_use_inches)
                     distance = GizmoObjectManipulation::mm_to_in * distance;
                 ImGui::PushID("ClipboardDistanceStrict");
-                add_measure_row_to_table(_u8L("Direct distance"), ImGuiWrapper::COL_BAMBU, format_double(distance) + m_units, ImGui::GetStyleColorVec4(ImGuiCol_Text));
+                add_measure_row_to_table(_u8L("Direct distance"), ImGuiWrapper::COL_BAMBU, format_double(distance), m_units, ImGui::GetStyleColorVec4(ImGuiCol_Text));
                 ++measure_row_count;
                 ImGui::PopID();
             }
@@ -1991,7 +2003,7 @@ void GLGizmoMeasure::show_distance_xyz_ui()
                 if (m_use_inches) distance = GizmoObjectManipulation::mm_to_in * distance;
                 if (measure.distance_xyz->norm() > EPSILON) {
                     ImGui::PushID("ClipboardDistanceXYZ");
-                    add_measure_row_to_table(_u8L("Distance XYZ"), ImGuiWrapper::COL_BAMBU, format_vec3(distance), ImGui::GetStyleColorVec4(ImGuiCol_Text));
+                    add_measure_row_to_table(_u8L("Distance XYZ"), ImGuiWrapper::COL_BAMBU, format_vec3(distance), m_units, ImGui::GetStyleColorVec4(ImGuiCol_Text));
                     ++measure_row_count;
                     ImGui::PopID();
                 }

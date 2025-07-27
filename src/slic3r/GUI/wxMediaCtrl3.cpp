@@ -190,6 +190,11 @@ void wxMediaCtrl3::PlayThread()
     using namespace std::chrono_literals;
     std::shared_ptr<wxURI> url;
     std::unique_lock<std::mutex> lk(m_mutex);
+
+    //frame count
+    int                                                frameCount = 0;
+    std::chrono::time_point<std::chrono::system_clock> lastSecondTime;
+
     while (true) {
         m_cond.wait(lk, [this, &url] { return m_url != url; });
         url = m_url;
@@ -197,6 +202,11 @@ void wxMediaCtrl3::PlayThread()
             continue;
         if (!url->HasScheme())
             break;
+
+        //reset frame
+        frameCount     = 0;
+        lastSecondTime = std::chrono::system_clock::now();
+
         lk.unlock();
         Bambu_Tunnel tunnel = nullptr;
         int error = Bambu_Create(&tunnel, m_url->BuildURI().ToUTF8());
@@ -221,10 +231,12 @@ void wxMediaCtrl3::PlayThread()
         if (error == 0)
             error = Bambu_GetStreamInfo(tunnel, 0, &info);
         AVVideoDecoder decoder;
+        int minFrameDuration = 0;
         if (error == 0) {
             decoder.open(info);
             m_video_size = { info.format.video.width, info.format.video.height };
             adjust_frame_size(m_frame_size, m_video_size, GetSize());
+            minFrameDuration = 800 / info.format.video.frame_rate; // 80%
             NotifyStopped();
         }
         Bambu_Sample sample;
@@ -258,8 +270,41 @@ void wxMediaCtrl3::PlayThread()
                     error = 1;
                     break;
                 }
-                if (bm.IsOk())
+                if (bm.IsOk()) {
+                    auto now = std::chrono::system_clock::now();
+
+                    frameCount++;
+                    auto elapsedTime = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSecondTime).count();
+
+                    if (elapsedTime >= 10000) {
+                        int fps = static_cast<int>(frameCount * 1000 / elapsedTime); // 100 is from frameCount * 1000 / elapsedTime * 10 , becasue  calculate the average rate over 10s
+                        BOOST_LOG_TRIVIAL(info) << "wxMediaCtrl3:Decode Real Rate: " << fps << " FPS";
+                        frameCount     = 0;
+                        lastSecondTime = now;
+                    }
+
+                    if (m_last_PTS && (sample.decode_time - m_last_PTS) < 30000000ULL) { // 3s
+                        auto next_PTS_expected = m_last_PTS_expected + std::chrono::milliseconds((sample.decode_time - m_last_PTS) / 10000ULL);
+                        // The frame is late, catch up a little
+                        auto next_PTS_practical = m_last_PTS_practical + std::chrono::milliseconds(minFrameDuration);
+                        auto next_PTS = std::max(next_PTS_expected, next_PTS_practical);
+                        if(now < next_PTS)
+                            std::this_thread::sleep_until(next_PTS);
+                        else
+                            next_PTS = now;
+                        //auto text = wxString::Format(L"wxMediaCtrl3 pts diff %ld\n", std::chrono::duration_cast<std::chrono::milliseconds>(next_PTS - next_PTS_expected).count());
+                        //OutputDebugString(text);
+                        m_last_PTS = sample.decode_time;
+                        m_last_PTS_expected = next_PTS_expected;
+                        m_last_PTS_practical = next_PTS;
+                    } else {
+                        // Resync
+                        m_last_PTS           = sample.decode_time;
+                        m_last_PTS_expected  = now;
+                        m_last_PTS_practical = now;
+                    }
                     m_frame = bm;
+                }
                 CallAfter([this] { Refresh(); });
             }
         }
@@ -276,7 +321,6 @@ void wxMediaCtrl3::PlayThread()
         m_video_size = wxDefaultSize;
         NotifyStopped();
     }
-
 }
 
 void wxMediaCtrl3::NotifyStopped()

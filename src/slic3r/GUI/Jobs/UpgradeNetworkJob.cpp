@@ -25,7 +25,7 @@ void UpgradeNetworkJob::on_exception(const std::exception_ptr &eptr)
     try {
         if (eptr)
             std::rethrow_exception(eptr);
-    } catch (std::exception &e) {
+    } catch (std::exception &/*e*/) {
         UpgradeNetworkJob::on_exception(eptr);
     }
 }
@@ -62,13 +62,15 @@ void UpgradeNetworkJob::process()
     auto path_str = tmp_path.string() + wxString::Format(".%d%s", get_current_pid(), ".tmp").ToStdString();
     tmp_path = fs::path(path_str);
 
-    BOOST_LOG_TRIVIAL(info) << "UpgradeNetworkJob: save netowrk_plugin to " << tmp_path.string();
+#if !BBL_RELEASE_TO_PUBLIC
+    BOOST_LOG_TRIVIAL(info) << "UpgradeNetworkJob: save network_plugin to " << PathSanitizer::sanitize(tmp_path);
+#endif
 
     auto cancel_fn = [this]() {
         return was_canceled();
     };
     int curr_percent = 0;
-    result = wxGetApp().download_plugin(name, package_name, 
+    result = wxGetApp().download_plugin(name, package_name,
         [this, &curr_percent](int state, int percent, bool &cancel) {
             if (state == InstallStatusNormal) {
                 update_status(percent, _L("Downloading"));
